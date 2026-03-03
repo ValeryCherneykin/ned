@@ -5,7 +5,7 @@
 ![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/ValeryCherneykin/ned?color=green)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-<img src="assets/logo.png" width="200">
+<img src="assets/logo.png" width="100">
 
 ----
 
