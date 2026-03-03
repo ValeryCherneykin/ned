@@ -1,6 +1,3 @@
-// Package connection manages the SSH connection lifecycle and SFTP client setup.
-// It owns nothing beyond the dial — callers are responsible for closing
-// the returned clients via the provided Closer.
 package connection
 
 import (
@@ -16,37 +13,65 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
+// Options configures an SSH connection.
+type Options struct {
+	// IdentityFile overrides the default key search with a specific private key path.
+	IdentityFile string
+}
+
+// Option is a functional option for connection.Open.
+type Option func(*Options)
+
+// WithIdentityFile sets an explicit private key path.
+func WithIdentityFile(path string) Option {
+	return func(o *Options) { o.IdentityFile = path }
+}
+
 // Session holds an active SSH connection and its SFTP client.
-// Always call Close when done to release both.
 type Session struct {
 	SSH  *ssh.Client
 	SFTP *sftp.Client
 }
 
-// Close shuts down the SFTP client and the underlying SSH connection.
-// It returns the first non-nil error encountered.
+// Close shuts down SFTP then SSH, returning the first error.
 func (s *Session) Close() error {
 	var sftpErr, sshErr error
-
 	if s.SFTP != nil {
 		sftpErr = s.SFTP.Close()
 	}
-
 	if s.SSH != nil {
 		sshErr = s.SSH.Close()
 	}
-
 	if sftpErr != nil {
 		return sftpErr
 	}
-
 	return sshErr
 }
 
+// RunCommand executes a shell command on the remote host and returns stdout.
+// Used by keygen to install the public key.
+func (s *Session) RunCommand(cmd string) (string, error) {
+	sess, err := s.SSH.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("new session: %w", err)
+	}
+	defer sess.Close()
+
+	out, err := sess.Output(cmd)
+	if err != nil {
+		return "", fmt.Errorf("run %q: %w", cmd, err)
+	}
+	return string(out), nil
+}
+
 // Open dials SSH to the target and initialises an SFTP client on top.
-// The caller must call Session.Close() when done.
-func Open(t target.Target) (*Session, error) {
-	sshClient, err := dialSSH(t)
+func Open(t target.Target, opts ...Option) (*Session, error) {
+	o := &Options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	sshClient, err := dialSSH(t, o)
 	if err != nil {
 		return nil, fmt.Errorf("SSH dial: %w", err)
 	}
@@ -57,24 +82,19 @@ func Open(t target.Target) (*Session, error) {
 		return nil, fmt.Errorf("SFTP init: %w", err)
 	}
 
-	return &Session{
-		SSH:  sshClient,
-		SFTP: sftpClient,
-	}, nil
+	return &Session{SSH: sshClient, SFTP: sftpClient}, nil
 }
 
-// dialSSH opens a raw SSH connection using the auth chain from package auth.
-func dialSSH(t target.Target) (*ssh.Client, error) {
+func dialSSH(t target.Target, o *Options) (*ssh.Client, error) {
 	hostKeyCallback, err := buildHostKeyCallback()
 	if err != nil {
-		// Act_1: warn and fall back. Act_2 will harden this into a hard error.
 		terminal.Warn("known_hosts unavailable (%v), skipping host key check", err)
-		hostKeyCallback = ssh.InsecureIgnoreHostKey() //nolint:gosec // act_1 fallback
+		hostKeyCallback = ssh.InsecureIgnoreHostKey() //nolint:gosec
 	}
 
 	cfg := &ssh.ClientConfig{
 		User:            t.User,
-		Auth:            auth.Methods(t.User),
+		Auth:            auth.Methods(t.User, o.IdentityFile),
 		HostKeyCallback: hostKeyCallback,
 	}
 
@@ -82,27 +102,19 @@ func dialSSH(t target.Target) (*ssh.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", t.Addr(), err)
 	}
-
 	return client, nil
 }
 
-// buildHostKeyCallback loads ~/.ssh/known_hosts.
-// Returns an error if the file is missing or cannot be parsed.
 func buildHostKeyCallback() (ssh.HostKeyCallback, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("resolve home dir: %w", err)
+		return nil, fmt.Errorf("resolve home: %w", err)
 	}
-
-	knownHostsPath := home + "/.ssh/known_hosts"
-
-	cb, err := knownhosts.New(knownHostsPath)
+	cb, err := knownhosts.New(home + "/.ssh/known_hosts")
 	if err != nil {
-		return nil, fmt.Errorf("load %s: %w", knownHostsPath, err)
+		return nil, fmt.Errorf("load known_hosts: %w", err)
 	}
-
 	return cb, nil
 }
 
-// Ensure Session satisfies io.Closer at compile time.
 var _ io.Closer = (*Session)(nil)
