@@ -1,53 +1,52 @@
-<div align="center">
-  <img src="assets/logo.png" alt="ned logo" width="500" />
+# ned
 
-  <h1>ned</h1>
+[![CI](https://github.com/ValeryCherneykin/ned/actions/workflows/ci.yml/badge.svg)](https://github.com/ValeryCherneykin/ned/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ValeryCherneykin/ned)](https://goreportcard.com/report/github.com/ValeryCherneykin/ned)
+![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/ValeryCherneykin/ned?color=green)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-  <p><strong>Open any remote file in your local editor. One command.</strong></p>
+<img src="assets/logo.png" width="200">
 
-  <p>
-    <a href="https://github.com/ValeryCherneykin/ned/actions/workflows/ci.yml">
-      <img src="https://github.com/ValeryCherneykin/ned/actions/workflows/ci.yml/badge.svg" alt="CI" />
-    </a>
-    <a href="https://github.com/ValeryCherneykin/ned/releases/latest">
-      <img src="https://img.shields.io/github/v/release/ValeryCherneykin/ned?color=green" alt="Release" />
-    </a>
-    <a href="https://goreportcard.com/report/github.com/ValeryCherneykin/ned">
-      <img src="https://goreportcard.com/badge/github.com/ValeryCherneykin/ned" alt="Go Report" />
-    </a>
-    <a href="https://opensource.org/licenses/MIT">
-      <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
-    </a>
-  </p>
-</div>
+----
 
----
+ned is a CLI tool that lets you open any remote file in your local editor — with a single command.
 
-Stop SSHing into servers just to edit a config file.  
-`ned` pulls the file to your machine, opens it in your local editor — Neovim, Vim, whatever you use — then pushes it back. Done.
+It connects over SSH or Docker, downloads the file to your machine,
+opens it in your local editor (Neovim, Vim, VSCode, etc.),
+and uploads it back after you save and exit.
+
+No installing editors on tiny VPS instances.  
+No fighting with `vi` on production.  
+No unnecessary setup.
 
 ```bash
 ned root@192.168.1.10:/etc/nginx/nginx.conf
-```
+````
 
-Works over SSH. Works with Docker containers. No setup required.
+Works over SSH. Works with Docker containers. Zero setup required.
 
 ---
 
 ## Install
 
-**Homebrew** (macOS & Linux)
+### Homebrew (macOS & Linux)
+
 ```bash
 brew tap ValeryCherneykin/ned
 brew install ned
 ```
 
-**Go**
+### Go
+
 ```bash
 go install github.com/ValeryCherneykin/ned/cmd/ned@latest
 ```
 
-**Binary** — download from [Releases](https://github.com/ValeryCherneykin/ned/releases/latest) for your platform.
+### Binary
+
+Download the latest release:
+
+[https://github.com/ValeryCherneykin/ned/releases/latest](https://github.com/ValeryCherneykin/ned/releases/latest)
 
 ---
 
@@ -58,7 +57,8 @@ ned [flags] [user@]host[:port]:/remote/path
 ned [flags] docker://container:/remote/path
 ```
 
-**SSH**
+### SSH
+
 ```bash
 # Basic
 ned root@192.168.1.10:/etc/nginx/nginx.conf
@@ -70,33 +70,28 @@ ned root@192.168.1.10:2222:/etc/.env
 ned -i ~/.ssh/prod_key deploy@prod.example.com:/app/.env
 ```
 
-**Docker**
+### Docker
+
 ```bash
-# Edit a file inside a running container — no SSH needed
+# Edit a file inside a running container
 ned docker://my-container:/app/config.json
 ned docker://postgres:/etc/postgresql/postgresql.conf
 ```
 
-**Config aliases**
+### Aliases (via config)
+
 ```bash
-# Instead of typing the full address every time
 ned prod:/etc/.env
 ned dev:/app/config.yml
+ned staging:/var/log/app.log
 ```
-
-**Flags**
-
-| Flag | Description |
-|------|-------------|
-| `-i <path>` | Path to SSH private key |
-| `-p <port>` | SSH port (overrides config and default 22) |
-| `--version` | Print version and exit |
 
 ---
 
-## First connect
+## First connection
 
-The first time you connect to a host with a password, ned offers to install an SSH key automatically:
+On the first password-based SSH connection, ned can automatically install
+an SSH key for passwordless access:
 
 ```
 → connecting root@192.168.1.10:22
@@ -107,13 +102,13 @@ No SSH key found for 192.168.1.10. Install one for passwordless access? [Y/n]: y
 ✓ SSH key installed — next connect will be passwordless
 ```
 
-From that point on, `ned root@192.168.1.10:/any/file` connects instantly with no password.
+After that, connections are instant.
 
 ---
 
 ## Config file
 
-Create `~/.ned/config.yml` to define aliases and defaults:
+Create `~/.ned/config.yml`:
 
 ```yaml
 defaults:
@@ -135,25 +130,33 @@ hosts:
     user: ubuntu
 ```
 
-Then just:
+Then:
+
 ```bash
 ned prod:/etc/nginx/nginx.conf
-ned dev:/app/.env
-ned staging:/var/log/app.log
 ```
+
+---
+
+## Flags
+
+| Flag        | Description                                |
+| ----------- | ------------------------------------------ |
+| `-i <path>` | Path to SSH private key                    |
+| `-p <port>` | SSH port (overrides config and default 22) |
+| `--version` | Print version and exit                     |
 
 ---
 
 ## Recovery
 
-If an upload fails mid-way (network drop, server restart), your changes are never lost:
+If upload fails (network drop, restart, etc.), your changes are saved locally:
 
 ```
-✗ upload failed — your changes are saved at:
-  ~/.ned/recovery/.env_20260304_153042
+~/.ned/recovery/.env_20260304_153042
 ```
 
-Fix the connection and re-run ned — your edits are waiting.
+Fix the connection and re-run ned — your edits are safe.
 
 ---
 
@@ -162,25 +165,32 @@ Fix the connection and re-run ned — your edits are waiting.
 ```
 ned root@host:/etc/.env
       │
-      ├── 1. Parse target
-      ├── 2. Connect via SSH (agent → key files → password)
-      ├── 3. SFTP download → /tmp/ned-.env-XXXXX
-      ├── 4. Open in $EDITOR (nvim / vim / nano)
-      ├── 5. Wait for editor to exit
-      ├── 6. SFTP upload → /etc/.env
-      └── 7. Clean up temp file
+      ├── Parse target
+      ├── Connect via SSH / Docker
+      ├── Download file
+      ├── Open in $EDITOR
+      ├── Wait for exit
+      ├── Upload back
+      └── Cleanup
 ```
 
-Signals are handled gracefully — if the process is interrupted during upload, changes are saved to `~/.ned/recovery/` before exit.
+Signals are handled gracefully to prevent data loss.
 
 ---
 
-## Editor
+## Editor behavior
 
-ned respects your `$EDITOR` environment variable. If not set, it tries `nvim → vim → nano → vi`.
+ned respects the `$EDITOR` environment variable.
+
+If not set, it tries:
+
+```
+nvim → vim → nano → vi
+```
+
+You can override per session:
 
 ```bash
-# Use a specific editor for one session
 EDITOR=hx ned root@host:/etc/.env
 ```
 
@@ -190,19 +200,18 @@ EDITOR=hx ned root@host:/etc/.env
 
 ```
 ned/
-├── cmd/ned/          # entry point — flags, wiring, graceful shutdown
+├── cmd/ned/          # entry point
 └── internal/
-    ├── auth/         # SSH auth chain: agent → keys → password
-    ├── backend/      # Backend interface + SSH/SFTP + Docker implementations
-    │   └── mock/     # In-memory backend for tests
-    ├── config/       # ~/.ned/config.yml loader and alias resolver
-    ├── connection/   # SSH dial + SFTP session lifecycle
-    ├── editor/       # $EDITOR resolution and exec
-    ├── keygen/       # ed25519 key generation + server install
-    ├── recovery/     # Save edits locally on upload failure
-    ├── target/       # CLI argument parser (SSH and Docker schemes)
-    ├── terminal/     # User-facing I/O: status, prompts, hidden password
-    └── transfer/     # Download to temp / upload from temp
+    ├── auth/         # SSH auth chain
+    ├── backend/      # SSH + Docker implementations
+    ├── config/       # config loader + alias resolver
+    ├── connection/   # SSH + SFTP lifecycle
+    ├── editor/       # $EDITOR resolution + exec
+    ├── keygen/       # ed25519 key generation
+    ├── recovery/     # local backup on failure
+    ├── target/       # CLI argument parser
+    ├── terminal/     # user I/O
+    └── transfer/     # download/upload logic
 ```
 
 ---
@@ -213,24 +222,15 @@ ned/
 git clone https://github.com/ValeryCherneykin/ned
 cd ned
 
-# Install dev tools
-task install-tools
-
-# Run tests
 task test
-
-# Run tests with race detector
-task test-race
-
-# Lint
 task lint
-
-# Full check before PR
 task check
 ```
+
+Pull requests are welcome.
 
 ---
 
 ## License
 
-MIT © [Valery Cherneykin](https://github.com/ValeryCherneykin)
+MIT © Valery Cherneykin
