@@ -28,7 +28,6 @@ linters:
     - ineffassign
     - staticcheck
     - unused
-    - typecheck
     - gosec
     - prealloc
     - unparam
