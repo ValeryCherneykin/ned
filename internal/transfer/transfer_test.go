@@ -25,7 +25,7 @@ func TestDownload_ExistingFile(t *testing.T) {
 		t.Fatalf("Download() error: %v", err)
 	}
 
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	if isNew {
 		t.Error("isNew = true, want false for existing file")
@@ -44,7 +44,6 @@ func TestDownload_ExistingFile(t *testing.T) {
 func TestDownload_NewFile(t *testing.T) {
 	t.Parallel()
 
-	// Backend with no files — simulates remote file not existing.
 	b := mock.New(nil)
 
 	tmpPath, isNew, err := transfer.Download(b, "/tmp/new-file.txt")
@@ -52,13 +51,12 @@ func TestDownload_NewFile(t *testing.T) {
 		t.Fatalf("Download() error: %v", err)
 	}
 
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	if !isNew {
 		t.Error("isNew = false, want true for missing file")
 	}
 
-	// Temp file should exist and be empty.
 	info, err := os.Stat(tmpPath)
 	if err != nil {
 		t.Fatalf("Stat(tmp): %v", err)
@@ -79,7 +77,7 @@ func TestDownload_TempFileNameContainsBasename(t *testing.T) {
 		t.Fatalf("Download() error: %v", err)
 	}
 
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	if !strings.Contains(tmpPath, "nginx.conf") {
 		t.Errorf("temp path %q does not contain file basename", tmpPath)
@@ -107,19 +105,20 @@ func TestUpload_WritesContentToBackend(t *testing.T) {
 
 	content := []byte("APP_ENV=production\nDB_URL=postgres://...\n")
 
-	// Write content to a temp file to simulate edited local file.
 	tmp, err := os.CreateTemp("", "ned-upload-test-")
 	if err != nil {
 		t.Fatalf("CreateTemp: %v", err)
 	}
 
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	if _, err = tmp.Write(content); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
-	tmp.Close()
+	if err = tmp.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
 	b := mock.New(nil)
 
@@ -152,8 +151,11 @@ func TestUpload_WriteError(t *testing.T) {
 		t.Fatalf("CreateTemp: %v", err)
 	}
 
-	defer os.Remove(tmp.Name())
-	tmp.Close()
+	defer func() { _ = os.Remove(tmp.Name()) }()
+
+	if err = tmp.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
 	b := mock.New(nil)
 	b.WriteErr = os.ErrPermission
@@ -186,7 +188,7 @@ func benchmarkDownload(b *testing.B, size int) {
 			b.Fatalf("Download error: %v", err)
 		}
 
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 	}
 
 	b.SetBytes(int64(size))
@@ -207,13 +209,15 @@ func benchmarkUpload(b *testing.B, size int) {
 		b.Fatalf("CreateTemp: %v", err)
 	}
 
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	if _, err = tmp.Write(content); err != nil {
 		b.Fatalf("Write: %v", err)
 	}
 
-	tmp.Close()
+	if err = tmp.Close(); err != nil {
+		b.Fatalf("Close: %v", err)
+	}
 
 	bk := mock.New(nil)
 

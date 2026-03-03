@@ -33,8 +33,12 @@ func TestOpen_NonExistentEditor(t *testing.T) {
 		t.Fatalf("CreateTemp: %v", err)
 	}
 
-	defer os.Remove(tmp.Name())
-	tmp.Close()
+	defer func() {
+		_ = os.Remove(tmp.Name()) // test cleanup — best effort
+	}()
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
 	// Should return an error — the binary doesn't exist.
 	if err = editor.Open(tmp.Name()); err == nil {

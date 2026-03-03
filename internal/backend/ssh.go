@@ -34,7 +34,11 @@ func (b *SSHBackend) WriteFile(path string, r io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("sftp create %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close remote file: %w", closeErr)
+		}
+	}()
 
 	if _, err = io.Copy(f, r); err != nil {
 		return fmt.Errorf("sftp write %s: %w", path, err)

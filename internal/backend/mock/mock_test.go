@@ -21,7 +21,11 @@ func TestBackend_ReadWrite(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	defer rc.Close()
+	defer func() {
+		if err := rc.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 
 	got, err := io.ReadAll(rc)
 	if err != nil {

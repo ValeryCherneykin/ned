@@ -56,7 +56,13 @@ func (s *Session) RunCommand(cmd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("new session: %w", err)
 	}
-	defer sess.Close()
+
+	defer func() {
+		if closeErr := sess.Close(); closeErr != nil {
+			// best-effort close on new session — ignore
+			_ = closeErr
+		}
+	}()
 
 	out, err := sess.Output(cmd)
 	if err != nil {

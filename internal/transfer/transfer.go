@@ -35,7 +35,11 @@ func Download(b backend.Backend, remotePath string) (tempPath string, isNew bool
 		_ = os.Remove(tmp.Name())
 		return "", false, fmt.Errorf("read remote %s: %w", remotePath, openErr)
 	}
-	defer remote.Close()
+	defer func() {
+		if closeErr := remote.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close remote: %w", closeErr)
+		}
+	}()
 
 	if _, err = io.Copy(tmp, remote); err != nil {
 		_ = os.Remove(tmp.Name())
@@ -51,7 +55,11 @@ func Upload(b backend.Backend, localPath, remotePath string) error {
 	if err != nil {
 		return fmt.Errorf("open local %s: %w", localPath, err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close local file: %w", closeErr)
+		}
+	}()
 
 	if err = b.WriteFile(remotePath, f); err != nil {
 		return fmt.Errorf("write remote %s: %w", remotePath, err)
