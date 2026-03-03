@@ -1,4 +1,4 @@
-# ned
+# Ned
 
 [![CI](https://github.com/ValeryCherneykin/ned/actions/workflows/ci.yml/badge.svg)](https://github.com/ValeryCherneykin/ned/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ValeryCherneykin/ned)](https://goreportcard.com/report/github.com/ValeryCherneykin/ned)
