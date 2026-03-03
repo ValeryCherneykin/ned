@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.png" alt="ned logo" width="320" />
+  <img src="assets/logo.png" alt="ned logo" width="500" />
 
   <h1>ned</h1>
 
