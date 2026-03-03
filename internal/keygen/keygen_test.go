@@ -1,6 +1,7 @@
 package keygen_test
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,7 @@ func TestEnsureKeyPair_GeneratesNewKeys(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp, err := keygen.EnsureKeyPair()
+	kp, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair() error: %v", err)
 	}
@@ -30,7 +31,7 @@ func TestEnsureKeyPair_Idempotent(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp1, err := keygen.EnsureKeyPair()
+	kp1, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("first EnsureKeyPair() error: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestEnsureKeyPair_Idempotent(t *testing.T) {
 		t.Fatalf("read key: %v", err)
 	}
 
-	kp2, err := keygen.EnsureKeyPair()
+	kp2, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("second EnsureKeyPair() error: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestEnsureKeyPair_PrivateKeyPermissions(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp, err := keygen.EnsureKeyPair()
+	kp, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair() error: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestEnsureKeyPair_PublicKeyFormat(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp, err := keygen.EnsureKeyPair()
+	kp, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair() error: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestInstallOnServer_ScriptContent(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp, err := keygen.EnsureKeyPair()
+	kp, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair() error: %v", err)
 	}

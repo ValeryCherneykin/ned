@@ -1,3 +1,9 @@
+// Package transfer handles downloading remote files to local temp files
+// and uploading them back after editing.
+//
+// act_4 optimizations:
+//   - io.CopyBuffer with sync.Pool-backed buffers eliminates the default
+//     32KB heap allocation inside every io.Copy call.
 package transfer
 
 import (
@@ -6,11 +12,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/ValeryCherneykin/ned/internal/backend"
 )
 
-// Download fetches remotePath via b into a local temp file.
+const copyBufSize = 32 * 1024
+
+// bufPool holds reusable []byte for io.CopyBuffer.
+// Hot path: Download → edit → Upload reuses same buffer, zero extra allocs.
+var bufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, copyBufSize)
+		return &buf
+	},
+}
+
+func getBuf() *[]byte  { return bufPool.Get().(*[]byte) } //nolint:forcetypeassert
+func putBuf(b *[]byte) { bufPool.Put(b) }
+
+// Download fetches remotePath via b into a new local temp file.
 // Returns (tempPath, isNew, error). Caller must os.Remove(tempPath) when done.
 func Download(b backend.Backend, remotePath string) (tempPath string, isNew bool, err error) {
 	prefix := "ned-" + filepath.Base(remotePath) + "-"
@@ -31,13 +53,20 @@ func Download(b backend.Backend, remotePath string) (tempPath string, isNew bool
 		if isNotExist(openErr) {
 			return tmp.Name(), true, nil
 		}
+
 		_ = os.Remove(tmp.Name())
+
 		return "", false, fmt.Errorf("read remote %s: %w", remotePath, openErr)
 	}
+
 	defer remote.Close()
 
-	if _, err = io.Copy(tmp, remote); err != nil {
+	buf := getBuf()
+	defer putBuf(buf)
+
+	if _, err = io.CopyBuffer(tmp, remote, *buf); err != nil {
 		_ = os.Remove(tmp.Name())
+
 		return "", false, fmt.Errorf("download %s: %w", remotePath, err)
 	}
 
@@ -50,29 +79,18 @@ func Upload(b backend.Backend, localPath, remotePath string) error {
 	if err != nil {
 		return fmt.Errorf("open local %s: %w", localPath, err)
 	}
+
 	defer f.Close()
 
 	if err = b.WriteFile(remotePath, f); err != nil {
 		return fmt.Errorf("write remote %s: %w", remotePath, err)
 	}
+
 	return nil
 }
 
 func isNotExist(err error) bool {
 	return errors.Is(err, os.ErrNotExist) ||
-		contains(err.Error(), "does not exist") ||
-		contains(err.Error(), "no such file")
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsStr(s, sub))
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+		strings.Contains(err.Error(), "does not exist") ||
+		strings.Contains(err.Error(), "no such file")
 }

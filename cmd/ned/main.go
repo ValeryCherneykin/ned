@@ -1,36 +1,71 @@
+// Command ned opens a remote file in your local editor over SSH/SFTP or Docker.
+//
+// Usage:
+//
+//	ned [flags] [user@]host[:port]:/remote/path
+//	ned [flags] docker://container:/remote/path
+//
+// Examples:
+//
+//	ned root@192.168.1.10:/etc/nginx/nginx.conf
+//	ned -i ~/.ssh/prod deploy@prod.example.com:/app/.env
+//	ned docker://my-container:/app/config.json
+//	ned prod:/etc/.env
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/ValeryCherneykin/ned/internal/backend"
 	"github.com/ValeryCherneykin/ned/internal/config"
 	"github.com/ValeryCherneykin/ned/internal/connection"
 	"github.com/ValeryCherneykin/ned/internal/editor"
 	"github.com/ValeryCherneykin/ned/internal/keygen"
+	"github.com/ValeryCherneykin/ned/internal/recovery"
 	"github.com/ValeryCherneykin/ned/internal/target"
 	"github.com/ValeryCherneykin/ned/internal/terminal"
 	"github.com/ValeryCherneykin/ned/internal/transfer"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=v1.0.0".
+var Version = "dev"
+
 func main() {
 	identityFile := flag.String("i", "", "SSH identity file")
 	portOverride := flag.String("p", "", "SSH port override")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = terminal.PrintUsage
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("ned %s\n", Version)
+		os.Exit(0)
+	}
 
 	if flag.NArg() != 1 {
 		terminal.PrintUsage()
 		os.Exit(1)
 	}
 
-	run(flag.Arg(0), *identityFile, *portOverride)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	run(ctx, flag.Arg(0), *identityFile, *portOverride)
 }
 
-func run(raw, identityFile, portOverride string) {
+// Options holds resolved connection parameters built from flags + config.
+type Options struct {
+	IdentityFile string
+	Port         string
+}
+
+func run(ctx context.Context, raw, identityFile, portOverride string) {
 	// ── Load config ──────────────────────────────────────────────────────────
 	cfg, err := config.Load()
 	if err != nil {
@@ -38,8 +73,7 @@ func run(raw, identityFile, portOverride string) {
 		cfg = &config.Config{}
 	}
 
-	// ── Parse target ─────────────────────────────────────────────────────────
-	// Try alias resolution first: if the raw arg has no ":/" it might be an alias.
+	// ── Resolve alias + parse target ─────────────────────────────────────────
 	resolved := resolveAlias(raw, cfg, portOverride)
 
 	t, err := target.Parse(resolved)
@@ -47,13 +81,11 @@ func run(raw, identityFile, portOverride string) {
 		terminal.Fatal("invalid target %q: %v", raw, err)
 	}
 
-	// Apply -p flag.
 	if portOverride != "" {
 		t.Port = portOverride
 	}
 
-	// Apply config defaults.
-	applyDefaults(&t, cfg, &identityFile)
+	opts := buildOptions(cfg, identityFile)
 
 	// ── Open backend ─────────────────────────────────────────────────────────
 	var b backend.Backend
@@ -65,14 +97,15 @@ func run(raw, identityFile, portOverride string) {
 		terminal.Status("connecting %s@%s:%s", t.User, t.Host, t.Port)
 
 		var connOpts []connection.Option
-		if identityFile != "" {
-			connOpts = append(connOpts, connection.WithIdentityFile(identityFile))
+		if opts.IdentityFile != "" {
+			connOpts = append(connOpts, connection.WithIdentityFile(opts.IdentityFile))
 		}
 
-		sess, err := connection.Open(t, connOpts...)
-		if err != nil {
-			terminal.Fatal("connection failed: %v", err)
+		sess, dialErr := connection.Open(t, connOpts...)
+		if dialErr != nil {
+			terminal.Fatal("connection failed: %v", dialErr)
 		}
+
 		defer func() {
 			if closeErr := sess.Close(); closeErr != nil {
 				terminal.Warn("close session: %v", closeErr)
@@ -80,10 +113,7 @@ func run(raw, identityFile, portOverride string) {
 		}()
 
 		terminal.Status("connected")
-
-		// Offer to install SSH key after first password-auth connect.
-		offerKeyInstall(sess, cfg, t)
-
+		offerKeyInstall(sess, t)
 		b = backend.NewSSH(sess.SFTP)
 	}
 
@@ -92,9 +122,14 @@ func run(raw, identityFile, portOverride string) {
 	if err != nil {
 		terminal.Fatal("download: %v", err)
 	}
+
+	removeTmp := true
+
 	defer func() {
-		if removeErr := os.Remove(tmpPath); removeErr != nil {
-			terminal.Warn("remove temp: %v", removeErr)
+		if removeTmp {
+			if removeErr := os.Remove(tmpPath); removeErr != nil {
+				terminal.Warn("remove temp: %v", removeErr)
+			}
 		}
 	}()
 
@@ -108,28 +143,66 @@ func run(raw, identityFile, portOverride string) {
 	terminal.Status("opening in %s", editor.Resolved())
 
 	if err = editor.Open(tmpPath); err != nil {
+		select {
+		case <-ctx.Done():
+			terminal.Warn("interrupted — discarding changes")
+			return
+		default:
+		}
+
 		terminal.Fatal("editor: %v", err)
 	}
 
 	// ── Upload ───────────────────────────────────────────────────────────────
 	terminal.Status("uploading to %s", t.RemotePath)
 
-	if err = transfer.Upload(b, tmpPath, t.RemotePath); err != nil {
-		terminal.Fatal("upload: %v", err)
+	uploadErr := transfer.Upload(b, tmpPath, t.RemotePath)
+
+	// Check if a signal arrived during upload.
+	select {
+	case <-ctx.Done():
+		if uploadErr == nil {
+			terminal.Success("saved %s", t)
+		} else {
+			handleUploadFailure(tmpPath, t.RemotePath, &removeTmp)
+		}
+
+		return
+	default:
+	}
+
+	if uploadErr != nil {
+		handleUploadFailure(tmpPath, t.RemotePath, &removeTmp)
+		os.Exit(1)
 	}
 
 	terminal.Success("saved %s", t)
 }
 
-// offerKeyInstall checks if ned's managed key is already in the auth chain.
-// If not, it asks the user if they want to install it for passwordless access.
-func offerKeyInstall(sess *connection.Session, cfg *config.Config, t target.Target) {
+// handleUploadFailure saves changes to ~/.ned/recovery/ so nothing is lost.
+func handleUploadFailure(tmpPath, remotePath string, removeTmp *bool) {
+	*removeTmp = false
+
+	savedPath, saveErr := recovery.Save(tmpPath, remotePath)
+	if saveErr != nil {
+		terminal.Warn("upload failed AND recovery save failed: %v", saveErr)
+		terminal.Warn("your edits are in temp file: %s", tmpPath)
+		return
+	}
+
+	*removeTmp = true
+
+	terminal.Warn("upload failed — your changes are saved at:")
+	terminal.Warn("  %s", savedPath)
+}
+
+// offerKeyInstall offers to generate and install an SSH key for passwordless access.
+func offerKeyInstall(sess *connection.Session, t target.Target) {
 	kp, err := keygen.DefaultKeyPair()
 	if err != nil {
 		return
 	}
 
-	// If the managed key already exists locally, assume it's already installed.
 	if _, err = os.Stat(kp.PrivatePath); err == nil {
 		return
 	}
@@ -141,60 +214,62 @@ func offerKeyInstall(sess *connection.Session, cfg *config.Config, t target.Targ
 		return
 	}
 
-	kp, err = keygen.EnsureKeyPair()
+	kp, err = keygen.EnsureKeyPair(os.Stdout)
 	if err != nil {
 		terminal.Warn("key generation failed: %v", err)
 		return
 	}
 
 	if err = keygen.InstallOnServer(kp.PublicPath, sess.RunCommand); err != nil {
-		terminal.Warn("key install failed: %v (you can add it manually)", err)
+		terminal.Warn("key install failed: %v (add it manually)", err)
 		return
 	}
 
 	terminal.Success("SSH key installed — next connect will be passwordless")
 }
 
-// resolveAlias checks if raw is a config alias and expands it.
+// resolveAlias expands a config alias to a full target string.
 func resolveAlias(raw string, cfg *config.Config, portOverride string) string {
-	// If it already contains ":/" it's a full target, not an alias.
 	if strings.Contains(raw, ":/") {
 		return raw
 	}
 
-	host, ok := cfg.ResolveAlias(raw)
+	h, ok := cfg.ResolveAlias(raw)
 	if !ok {
-		return raw // let Parse produce the error
+		return raw
 	}
 
-	user := host.User
+	user := h.User
 	if user == "" {
 		user = cfg.Defaults.User
 	}
 
-	port := host.Port
+	port := h.Port
 	if port == "" {
 		port = cfg.Defaults.Port
 	}
+
 	if portOverride != "" {
 		port = portOverride
 	}
 
-	if user != "" && port != "" {
-		return fmt.Sprintf("%s@%s:%s:/", user, host.Host, port)
+	switch {
+	case user != "" && port != "":
+		return fmt.Sprintf("%s@%s:%s:/", user, h.Host, port)
+	case user != "":
+		return fmt.Sprintf("%s@%s:/", user, h.Host)
+	default:
+		return fmt.Sprintf("%s:/", h.Host)
 	}
-	if user != "" {
-		return fmt.Sprintf("%s@%s:/", user, host.Host)
-	}
-	return fmt.Sprintf("%s:/", host.Host)
 }
 
-// applyDefaults fills in zero fields from the config defaults.
-func applyDefaults(t *target.Target, cfg *config.Config, identityFile *string) {
-	if t.User == "" && cfg.Defaults.User != "" {
-		t.User = cfg.Defaults.User
+// buildOptions merges CLI flags with config defaults.
+func buildOptions(cfg *config.Config, identityFile string) Options {
+	opts := Options{IdentityFile: identityFile}
+
+	if opts.IdentityFile == "" && cfg.Defaults.Identity != "" {
+		opts.IdentityFile = cfg.Defaults.Identity
 	}
-	if *identityFile == "" && cfg.Defaults.Identity != "" {
-		*identityFile = cfg.Defaults.Identity
-	}
+
+	return opts
 }

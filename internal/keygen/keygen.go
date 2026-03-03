@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,13 +33,16 @@ func DefaultKeyPair() (KeyPair, error) {
 	if err != nil {
 		return KeyPair{}, fmt.Errorf("resolve home: %w", err)
 	}
+
 	base := filepath.Join(home, ".ssh", KeyName)
+
 	return KeyPair{PrivatePath: base, PublicPath: base + ".pub"}, nil
 }
 
 // EnsureKeyPair generates ~/.ssh/ned_id_ed25519 if it does not exist.
-// Returns the key pair paths regardless of whether they were just created.
-func EnsureKeyPair() (KeyPair, error) {
+// Status messages are written to out — pass os.Stdout for normal use,
+// io.Discard in tests to suppress output.
+func EnsureKeyPair(out io.Writer) (KeyPair, error) {
 	kp, err := DefaultKeyPair()
 	if err != nil {
 		return KeyPair{}, err
@@ -53,7 +57,8 @@ func EnsureKeyPair() (KeyPair, error) {
 		return KeyPair{}, fmt.Errorf("generate key pair: %w", err)
 	}
 
-	fmt.Printf("✓ generated new SSH key: %s\n", kp.PrivatePath)
+	fmt.Fprintf(out, "✓ generated new SSH key: %s\n", kp.PrivatePath)
+
 	return kp, nil
 }
 
@@ -95,7 +100,7 @@ func generate(kp KeyPair) error {
 		return fmt.Errorf("marshal private key: %w", err)
 	}
 
-	// Create ~/.ssh/ if it doesn't exist yet.
+	// Create ~/.ssh/ if it does not exist yet.
 	if err = os.MkdirAll(filepath.Dir(kp.PrivatePath), 0o700); err != nil {
 		return fmt.Errorf("create .ssh dir: %w", err)
 	}
@@ -109,9 +114,7 @@ func generate(kp KeyPair) error {
 		return fmt.Errorf("create ssh public key: %w", err)
 	}
 
-	pubLine := ssh.MarshalAuthorizedKey(sshPub)
-
-	if err = os.WriteFile(kp.PublicPath, pubLine, 0o644); err != nil {
+	if err = os.WriteFile(kp.PublicPath, ssh.MarshalAuthorizedKey(sshPub), 0o644); err != nil {
 		return fmt.Errorf("write public key: %w", err)
 	}
 
