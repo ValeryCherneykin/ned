@@ -90,17 +90,20 @@ func generate(kp KeyPair) error {
 		return fmt.Errorf("generate ed25519 key: %w", err)
 	}
 
-	// Marshal private key to OpenSSH PEM format.
 	privPEM, err := ssh.MarshalPrivateKey(priv, "ned managed key")
 	if err != nil {
 		return fmt.Errorf("marshal private key: %w", err)
+	}
+
+	// Create ~/.ssh/ if it doesn't exist yet.
+	if err = os.MkdirAll(filepath.Dir(kp.PrivatePath), 0o700); err != nil {
+		return fmt.Errorf("create .ssh dir: %w", err)
 	}
 
 	if err = os.WriteFile(kp.PrivatePath, pem.EncodeToMemory(privPEM), 0o600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
 
-	// Marshal public key to authorized_keys format.
 	sshPub, err := ssh.NewPublicKey(pub)
 	if err != nil {
 		return fmt.Errorf("create ssh public key: %w", err)
