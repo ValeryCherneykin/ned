@@ -1,3 +1,9 @@
+// Package auth builds the SSH authentication method chain used when dialing.
+//
+// Priority order:
+//  1. SSH agent ($SSH_AUTH_SOCK)
+//  2. Private key files (~/.ssh/ned_id_ed25519, id_ed25519, id_rsa, id_ecdsa)
+//  3. Interactive password prompt (characters hidden via x/term)
 package auth
 
 import (

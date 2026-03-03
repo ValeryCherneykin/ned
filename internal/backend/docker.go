@@ -36,18 +36,14 @@ func (b *DockerBackend) WriteFile(path string, r io.Reader) error {
 		return err
 	}
 
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return fmt.Errorf("read local file: %w", err)
-	}
-
-	// Pipe content into the container via tee.
+	// Stream directly into container stdin — no intermediate buffer.
 	cmd := exec.Command("docker", "exec", "-i", b.container, "tee", path)
-	cmd.Stdin = bytes.NewReader(data)
+	cmd.Stdin = r
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker exec tee %s: %w\n%s", path, err, out)
 	}
+
 	return nil
 }
 

@@ -66,15 +66,16 @@ func (b *Backend) WriteFile(path string, r io.Reader) error {
 		return b.WriteErr
 	}
 
-	data, err := io.ReadAll(r)
-	if err != nil {
+	var buf bytes.Buffer
+
+	if _, err := io.Copy(&buf, r); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.files[path] = data
+	b.files[path] = buf.Bytes()
 
 	return nil
 }

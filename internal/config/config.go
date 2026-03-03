@@ -1,3 +1,8 @@
+// Package config loads ned's configuration from ~/.ned/config.yml.
+//
+// The config file is optional — ned works without it.
+// When present it provides host aliases, default user/port/identity,
+// eliminating the need to type full connection strings repeatedly.
 package config
 
 import (

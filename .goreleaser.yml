@@ -1,0 +1,38 @@
+version: 2
+
+project_name: ned
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - main: ./cmd/ned
+    binary: ned
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: ned
+    repository:
+      owner: ValeryCherneykin
+      name: homebrew-ned
+    homepage: https://github.com/ValeryCherneykin/ned
+    description: "Open remote files in your local editor over SSH or Docker"
+    license: MIT
+    test: |
+      system "#{bin}/ned --version"

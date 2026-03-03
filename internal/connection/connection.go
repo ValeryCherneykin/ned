@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/ValeryCherneykin/ned/internal/auth"
 	"github.com/ValeryCherneykin/ned/internal/target"
@@ -105,15 +106,20 @@ func dialSSH(t target.Target, o *Options) (*ssh.Client, error) {
 	return client, nil
 }
 
+// filepath.Join is always correct.
 func buildHostKeyCallback() (ssh.HostKeyCallback, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home: %w", err)
 	}
-	cb, err := knownhosts.New(home + "/.ssh/known_hosts")
+
+	knownHostsPath := filepath.Join(home, ".ssh", "known_hosts") // fixed
+
+	cb, err := knownhosts.New(knownHostsPath)
 	if err != nil {
 		return nil, fmt.Errorf("load known_hosts: %w", err)
 	}
+
 	return cb, nil
 }
 
