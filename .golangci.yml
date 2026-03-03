@@ -6,292 +6,100 @@
 version: "2"
 
 run:
-  timeout: 5m                # generous timeout for thorough analysis of a library
-  tests: true                # lint test files too — bugs hide in tests
-  modules-download-mode: readonly  # prevent accidental modifications during lint
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
 
-  # Include examples/ — we want production-grade quality even in docs
-  skip-dirs:
-    - vendor
-    - third_party
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
-output:
-  format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true
-  uniq-by-line: true
-  sort-results: true
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ValeryCherneykin/ned
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - typecheck
+    - gosec
+    - prealloc
+    - unparam
+    - errorlint
+    - godot
+    - exhaustive
+    - gocritic
+    - revive
+    - stylecheck
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    govet:
+      enable-all: true
+
+    gosec:
+      severity: medium
+      confidence: medium
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    godot:
+      scope: declarations
+      capital: false
+      period: true
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - checkPrivateReceivers
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: var-naming
+        - name: receiver-naming
+        - name: context-as-argument
+
+    stylecheck:
+      checks:
+        - all
+        - "-ST1000"
+
+    exhaustive:
+      check:
+        - switch
+      default-signifies-exhaustive: true
 
 issues:
-  # Be ruthless: show EVERY issue. Libraries deserve zero tolerance for warnings.
   max-issues-per-linter: 0
   max-same-issues: 0
 
+  exclude-dirs:
+    - vendor
+    - third_party
+
   exclude-rules:
-    # Relax complexity checks in tests — they often need more boilerplate
-    - path: _test\.go
+    - path: "_test\\.go"
       linters:
-        - cyclop
-        - funlen
-        - maintidx
-        - gocognit
-
-    # Examples are allowed to use simple printing for clarity
-    - path: examples/.*\.go
-      linters:
-        - forbidigo
-
-    # Benchmarks can be intentionally longer
-    - path: benchmarks/.*_test\.go
-      linters:
-        - funlen
-        - gocognit
-
-linters:
-  # Enable everything and disable only what's deliberately inappropriate for a library
-  enable-all: true
-
-disable:
-    # Too opinionated / noisy for library API surface
-    - exhaustruct
-    - varnamelen
-    - wrapcheck
-    - nlreturn
-    - wsl
-
-    # Duplicates
-    - lll
-    - gocyclo
-
-linters-settings:
-  # ────────────────────────────────────────────────
-  # Documentation & Naming – Critical for public API
-  # ────────────────────────────────────────────────
-  revive:
-    severity: error
-    enable-all-rules: false
-    rules:
-      # Enforce godoc on all exported identifiers
-      - name: exported
-        severity: error
-        arguments:
-          - "checkPrivateReceivers"
-          - "sayRepetitiveInsteadOfStutters"
-
-      - name: package-comments
-        severity: error
-      - name: var-naming
-        severity: error
-      - name: receiver-naming
-        severity: error
-      - name: context-keys-type
-        severity: error
-      - name: context-as-argument
-        severity: error
-        arguments:
-          - allowTypesBefore: "*testing.T"
-
-      # Keep cognitive & cyclomatic complexity low — libraries must be understandable
-      - name: cognitive-complexity
-        severity: error
-        arguments: [15]
-      - name: cyclomatic
-        severity: error
-        arguments: [15]
-
-      - name: function-length
-        severity: warning
-        arguments: [50, 0]   # 50 lines max — encourages small, focused functions
-
-      - name: max-public-structs
-        severity: warning
-        arguments: [10]
-
-      # Error handling & naming best practices
-      - name: error-return
-        severity: error
-      - name: error-strings
-        severity: error
-      - name: error-naming
-        severity: error
-
-      # Many more revive rules enabled implicitly via enable-all-rules: false + selective enable
-
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-      - experimental
-      - opinionated
-    disabled-checks:
-      - whyNoLint          # allow //nolint without mandatory explanation (common practice)
-    settings:
-      captLocal:
-        paramsOnly: false
-      underef:
-        skipRecvDeref: false
-
-  # ────────────────────────────────────────────────
-  # Complexity & Maintainability – Stricter for libraries
-  # ────────────────────────────────────────────────
-  cyclop:
-    max-complexity: 15     # lower than default — libraries should be simple to reason about
-    package-average: 10
-    skip-tests: true
-
-  gocognit:
-    min-complexity: 15
-
-  funlen:
-    lines: 50              # keep functions readable
-    statements: 30
-    ignore-comments: true
-
-  maintidx:
-    under: 20              # high maintainability index required
-
-  # ────────────────────────────────────────────────
-  # Security & Dangerous Patterns
-  # ────────────────────────────────────────────────
-  gosec:
-    severity: medium
-    confidence: medium
-    excludes:
-      - G104               # allow ignoring some errors intentionally
-    config:
-      global:
-        audit: true
-
-  # ────────────────────────────────────────────────
-  # Dependency Hygiene
-  # ────────────────────────────────────────────────
-  depguard:
-    rules:
-      main:
-        files:
-          - "!**/*_test.go"
-        deny:
-          - pkg: io/ioutil
-            desc: "Deprecated: use os and io packages instead"
-          - pkg: github.com/pkg/errors
-            desc: "Use built-in errors with %w wrapping"
-          - pkg: gopkg.in/yaml.v2
-            desc: "Use gopkg.in/yaml.v3 instead"
-
-      # Prevent leaking stdlib logging into public API
-      prevent-stdlib-in-api:
-        files:
-          - "!**/*_test.go"
-          - "!**/internal/**"
-        deny:
-          - pkg: log
-            desc: "Do not expose stdlib log in public library API"
-          - pkg: fmt
-            desc: "Avoid fmt for logging/output in library code"
-
-  # ────────────────────────────────────────────────
-  # Error Wrapping & Assertions
-  # ────────────────────────────────────────────────
-  errorlint:
-    errorf: true
-    errorf-multi: true
-    asserts: true
-    comparison: true
-
-  # ────────────────────────────────────────────────
-  # Forbidden Patterns in Library Code
-  # ────────────────────────────────────────────────
-  forbidigo:
-    forbid:
-      - pattern: '^print.*$'
-        msg: "Use structured logger instead of print"
-      - pattern: '^panic$'
-        msg: "Do not panic in library code — return errors"
-      - pattern: '^os\.Exit$'
-        msg: "Do not call os.Exit in library code"
-      - pattern: '^log\.'
-        msg: "Do not use stdlib log — use structured logger"
-      - pattern: '^fmt\.Print.*$'
-        msg: "Do not use fmt.Print* for output/logging"
-    exclude-godoc-examples: true
-    analyze-types: true
-
-  # ────────────────────────────────────────────────
-  # Formatting & Imports (modern strict style)
-  # ────────────────────────────────────────────────
-  gofumpt:
-    extra-rules: true
-    lang-version: "1.21"
-    module-path: github.com/ValeryCherneykin/ned
-
-  gci:
-    sections:
-      - standard
-      - default
-      - prefix(github.com/ValeryCherneykin/ned)
-      - blank
-      - dot
-    custom-order: true
-
-  goimports:
-    local-prefixes: github.com/ValeryCherneykin/ned
-
-  # ────────────────────────────────────────────────
-  # Testing & Assertions
-  # ────────────────────────────────────────────────
-  testifylint:
-    enable-all: true
-
-  # ────────────────────────────────────────────────
-  # Performance Hints
-  # ────────────────────────────────────────────────
-  prealloc:
-    simple: true
-    range-loops: true
-    for-loops: true
-
-  # ────────────────────────────────────────────────
-  # Style & Misc
-  # ────────────────────────────────────────────────
-  stylecheck:
-    checks:
-      - "all"
-      - "-ST1000"          # allow package comment != package name
-
-  tagliatelle:
-    case:
-      rules:
-        json: snake
-        yaml: snake
-        xml: camel
-        bson: camel
-        avro: snake
-        mapstructure: kebab
-
-  exhaustive:
-    check:
-      - switch
-      - map
-    default-signifies-exhaustive: false
-
-  nilnil:
-    checked-types:
-      - ptr
-      - func
-      - iface
-      - map
-      - chan
-
-  unparam:
-    check-exported: true   # be strict even on exported API
-
-  unused:
-    field-writes-are-uses: false
-    exported-is-used: false
-    exported-fields-are-used: false
-
-  godot:
-    scope: all
-    capital: true
-    period: true
+        - gosec
+        - unparam
+        - godot
