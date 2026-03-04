@@ -1,5 +1,5 @@
 // Package editor resolves the user's preferred local editor and opens a file in it.
-// It knows nothing about SSH, SFTP, or file paths beyond what it receives.
+// It knows nothing about SSH, SFTP, or remote paths.
 package editor
 
 import (
@@ -8,56 +8,51 @@ import (
 	"os/exec"
 )
 
-// preferenceChain is the ordered list of editor candidates when $EDITOR is not set.
+// preferenceChain is the ordered list of editor candidates tried when $EDITOR is not set.
 var preferenceChain = []string{"nvim", "vim", "nano", "vi"}
 
-// Open opens the file at path in the user's preferred editor and blocks until
-// the editor exits. The editor's stdin/stdout/stderr are connected to the
-// calling process's terminal so it renders correctly.
+// Open opens the file at path in the resolved editor and blocks until the editor exits.
+// stdin, stdout, and stderr are connected to the calling process so the editor renders correctly.
 func Open(path string) error {
-	editor, err := resolve()
-	if err != nil {
-		return err
-	}
+	e := resolve()
 
-	cmd := exec.Command(editor, path)
+	cmd := exec.Command(e, path) //nolint:gosec
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err = cmd.Run(); err != nil {
-		return fmt.Errorf("editor %q: %w", editor, err)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("editor %q: %w", e, err)
 	}
 
 	return nil
 }
 
-// Resolved returns the editor binary that would be used, without opening anything.
-// Useful for status messages before calling Open.
+// Resolved returns the editor binary that would be used without opening anything.
+// Useful for printing status messages before calling Open.
 func Resolved() string {
-	e, _ := resolve()
-	return e
+	return resolve()
 }
 
 // resolve finds the best available editor.
-// Priority: $EDITOR env var → preference chain → "vi" as a hard fallback.
-func resolve() (string, error) {
-	// Respect the user's explicit preference first.
+// Priority: $EDITOR → nvim → vim → nano → vi.
+// Always returns a non-empty string — falls back to "vi" as a last resort.
+func resolve() string {
 	if e := os.Getenv("EDITOR"); e != "" {
 		if path, err := exec.LookPath(e); err == nil {
-			return path, nil
+			return path
 		}
-		// $EDITOR is set but the binary is not found — still try it and let
-		// the OS give a descriptive error rather than silently falling back.
-		return e, nil
+		// $EDITOR is set but binary not found — return it anyway so the OS
+		// gives a descriptive "not found" error rather than silently falling back.
+		return e
 	}
 
 	for _, candidate := range preferenceChain {
 		if path, err := exec.LookPath(candidate); err == nil {
-			return path, nil
+			return path
 		}
 	}
 
-	// Nothing found — return "vi" and let the OS error be the message.
-	return "vi", nil
+	// Nothing found — return "vi" and let the OS produce the error message.
+	return "vi"
 }

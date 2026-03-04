@@ -82,7 +82,7 @@ func run(raw, identityFile, portOverride string) {
 		terminal.Status("connected")
 
 		// Offer to install SSH key after first password-auth connect.
-		offerKeyInstall(sess, cfg, t)
+		offerKeyInstall(sess, t)
 
 		b = backend.NewSSH(sess.SFTP)
 	}
@@ -123,7 +123,7 @@ func run(raw, identityFile, portOverride string) {
 
 // offerKeyInstall checks if ned's managed key is already in the auth chain.
 // If not, it asks the user if they want to install it for passwordless access.
-func offerKeyInstall(sess *connection.Session, cfg *config.Config, t target.Target) {
+func offerKeyInstall(sess *connection.Session, t target.Target) {
 	kp, err := keygen.DefaultKeyPair()
 	if err != nil {
 		return
@@ -141,7 +141,7 @@ func offerKeyInstall(sess *connection.Session, cfg *config.Config, t target.Targ
 		return
 	}
 
-	kp, err = keygen.EnsureKeyPair()
+	kp, err = keygen.EnsureKeyPair(os.Stdout)
 	if err != nil {
 		terminal.Warn("key generation failed: %v", err)
 		return

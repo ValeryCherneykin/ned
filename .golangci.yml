@@ -36,25 +36,30 @@ linters:
   settings:
     errcheck:
       check-type-assertions: true
-      check-blank: true
+      check-blank: false
 
     govet:
       enable-all: true
+      disable:
+        - fieldalignment  # struct layout optimisation — opt-in, not a correctness issue
+        - shadow          # too noisy in idiomatic Go; err re-use in if blocks is normal
 
     gosec:
       severity: medium
       confidence: medium
-
-    errorlint:
-      errorf: true
-      asserts: true
-      comparison: true
+      excludes:
+        - G204  # subprocess with variable args — intentional (docker exec, editor open)
+        - G304  # file path from variable — intentional (file editor tool by design)
+        - G306  # public key is 0644 by convention (not secret)
 
     gocritic:
       enabled-tags:
         - diagnostic
         - style
         - performance
+      disabled-checks:
+        - hugeParam      # target.Target is 80 bytes — fine for a CLI tool, not a hot loop
+        - whyNoLint      # nolint without explanation is common in obvious cases
 
     revive:
       rules:
@@ -67,6 +72,20 @@ linters:
         - name: var-naming
         - name: receiver-naming
         - name: context-as-argument
+
+    unparam:
+      check-exported: false
+
+exclusions:
+  rules:
+    # Test cleanup: os.Remove failure is logged but not fatal — intentional discard.
+    - path: "_test\\.go"
+      linters:
+        - errcheck
+    # gosec in tests is noise — no production security risk.
+    - path: "_test\\.go"
+      linters:
+        - gosec
 
 issues:
   max-issues-per-linter: 0

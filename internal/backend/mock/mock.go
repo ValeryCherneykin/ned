@@ -15,24 +15,22 @@ import (
 // Backend is a thread-safe in-memory implementation of backend.Backend.
 // Use New() to create one pre-seeded with files.
 type Backend struct {
+	// WriteErr forces WriteFile to return this error (for error path tests).
+	WriteErr error
+	// ReadErr forces ReadFile to return this error (for error path tests).
+	ReadErr error
+
 	mu    sync.RWMutex
 	files map[string][]byte
 
 	// MkdirAllCalled tracks which paths were passed to MkdirAll.
 	MkdirAllCalled []string
-
 	// Closed reports whether Close was called.
 	Closed bool
-
-	// WriteErr forces WriteFile to return this error (for error path tests).
-	WriteErr error
-
-	// ReadErr forces ReadFile to return this error (for error path tests).
-	ReadErr error
 }
 
 // New creates a Backend pre-seeded with the given files.
-// Keys are remote paths, values are file contents.
+// Keys are remote paths, values are file contents. Pass nil for an empty backend.
 func New(files map[string][]byte) *Backend {
 	if files == nil {
 		files = make(map[string][]byte)

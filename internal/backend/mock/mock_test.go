@@ -22,14 +22,14 @@ func TestBackend_ReadWrite(t *testing.T) {
 	}
 
 	defer func() {
-		if err := rc.Close(); err != nil {
-			t.Errorf("Close: %v", err)
+		if closeErr := rc.Close(); closeErr != nil {
+			t.Errorf("Close: %v", closeErr)
 		}
 	}()
 
-	got, err := io.ReadAll(rc)
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
+	got, readErr := io.ReadAll(rc)
+	if readErr != nil {
+		t.Fatalf("ReadAll: %v", readErr)
 	}
 
 	if !bytes.Equal(got, content) {
@@ -86,7 +86,9 @@ func TestBackend_MkdirAllTracking(t *testing.T) {
 
 	b := mock.New(nil)
 
-	_ = b.MkdirAll("/some/deep/path")
+	if err := b.MkdirAll("/some/deep/path"); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	if !b.HasMkdirAll("/some/deep/path") {
 		t.Error("HasMkdirAll(/some/deep/path) = false after call")
@@ -99,8 +101,7 @@ func TestBackend_WriteErr(t *testing.T) {
 	b := mock.New(nil)
 	b.WriteErr = os.ErrPermission
 
-	err := b.WriteFile("/f", bytes.NewReader([]byte("x")))
-	if err == nil {
+	if err := b.WriteFile("/f", bytes.NewReader([]byte("x"))); err == nil {
 		t.Error("WriteFile expected error, got nil")
 	}
 }
@@ -111,8 +112,7 @@ func TestBackend_ReadErr(t *testing.T) {
 	b := mock.New(map[string][]byte{"/f": []byte("x")})
 	b.ReadErr = os.ErrPermission
 
-	_, err := b.ReadFile("/f")
-	if err == nil {
+	if _, err := b.ReadFile("/f"); err == nil {
 		t.Error("ReadFile expected error, got nil")
 	}
 }

@@ -1,6 +1,8 @@
 package keygen_test
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,15 +15,14 @@ func TestEnsureKeyPair_GeneratesNewKeys(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp, err := keygen.EnsureKeyPair()
+	kp, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair() error: %v", err)
 	}
 
-	// Both files must exist.
 	for _, path := range []string{kp.PrivatePath, kp.PublicPath} {
-		if _, err = os.Stat(path); err != nil {
-			t.Errorf("expected file %q to exist: %v", path, err)
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Errorf("expected file %q to exist: %v", path, statErr)
 		}
 	}
 }
@@ -30,18 +31,17 @@ func TestEnsureKeyPair_Idempotent(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp1, err := keygen.EnsureKeyPair()
+	kp1, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("first EnsureKeyPair() error: %v", err)
 	}
 
-	// Read private key content before second call.
 	first, err := os.ReadFile(kp1.PrivatePath)
 	if err != nil {
 		t.Fatalf("read key: %v", err)
 	}
 
-	kp2, err := keygen.EnsureKeyPair()
+	kp2, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("second EnsureKeyPair() error: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestEnsureKeyPair_Idempotent(t *testing.T) {
 	}
 
 	// Key must not be regenerated on second call.
-	if string(first) != string(second) {
+	if !bytes.Equal(first, second) {
 		t.Error("EnsureKeyPair() regenerated key on second call — should be idempotent")
 	}
 }
@@ -61,7 +61,7 @@ func TestEnsureKeyPair_PrivateKeyPermissions(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp, err := keygen.EnsureKeyPair()
+	kp, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair() error: %v", err)
 	}
@@ -71,9 +71,7 @@ func TestEnsureKeyPair_PrivateKeyPermissions(t *testing.T) {
 		t.Fatalf("Stat: %v", err)
 	}
 
-	// Private key must be 0600 — readable only by owner.
-	perm := info.Mode().Perm()
-	if perm != 0o600 {
+	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("private key permissions = %o, want 0600", perm)
 	}
 }
@@ -82,7 +80,7 @@ func TestEnsureKeyPair_PublicKeyFormat(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp, err := keygen.EnsureKeyPair()
+	kp, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair() error: %v", err)
 	}
@@ -92,9 +90,14 @@ func TestEnsureKeyPair_PublicKeyFormat(t *testing.T) {
 		t.Fatalf("read public key: %v", err)
 	}
 
-	// authorized_keys format starts with the key type.
 	if !strings.HasPrefix(string(pub), "ssh-ed25519 ") {
-		t.Errorf("public key format unexpected: %q", string(pub)[:min(len(pub), 40)])
+		// Show at most 40 chars of the unexpected prefix.
+		preview := string(pub)
+		if len(preview) > 40 {
+			preview = preview[:40]
+		}
+
+		t.Errorf("public key format unexpected: %q", preview)
 	}
 }
 
@@ -123,7 +126,7 @@ func TestInstallOnServer_ScriptContent(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
-	kp, err := keygen.EnsureKeyPair()
+	kp, err := keygen.EnsureKeyPair(io.Discard)
 	if err != nil {
 		t.Fatalf("EnsureKeyPair() error: %v", err)
 	}
@@ -139,20 +142,11 @@ func TestInstallOnServer_ScriptContent(t *testing.T) {
 		t.Fatalf("InstallOnServer() error: %v", err)
 	}
 
-	// Script must reference authorized_keys.
 	if !strings.Contains(capturedCmd, "authorized_keys") {
 		t.Errorf("install script does not mention authorized_keys:\n%s", capturedCmd)
 	}
 
-	// Script must be idempotent (grep check).
 	if !strings.Contains(capturedCmd, "grep") {
 		t.Errorf("install script missing idempotency check (grep):\n%s", capturedCmd)
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

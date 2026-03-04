@@ -25,7 +25,11 @@ func TestDownload_ExistingFile(t *testing.T) {
 		t.Fatalf("Download() error: %v", err)
 	}
 
-	defer func() { _ = os.Remove(tmpPath) }()
+	t.Cleanup(func() {
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			t.Logf("cleanup: remove %s: %v", tmpPath, removeErr)
+		}
+	})
 
 	if isNew {
 		t.Error("isNew = true, want false for existing file")
@@ -51,7 +55,11 @@ func TestDownload_NewFile(t *testing.T) {
 		t.Fatalf("Download() error: %v", err)
 	}
 
-	defer func() { _ = os.Remove(tmpPath) }()
+	t.Cleanup(func() {
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			t.Logf("cleanup: remove %s: %v", tmpPath, removeErr)
+		}
+	})
 
 	if !isNew {
 		t.Error("isNew = false, want true for missing file")
@@ -77,7 +85,11 @@ func TestDownload_TempFileNameContainsBasename(t *testing.T) {
 		t.Fatalf("Download() error: %v", err)
 	}
 
-	defer func() { _ = os.Remove(tmpPath) }()
+	t.Cleanup(func() {
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			t.Logf("cleanup: remove %s: %v", tmpPath, removeErr)
+		}
+	})
 
 	if !strings.Contains(tmpPath, "nginx.conf") {
 		t.Errorf("temp path %q does not contain file basename", tmpPath)
@@ -110,7 +122,11 @@ func TestUpload_WritesContentToBackend(t *testing.T) {
 		t.Fatalf("CreateTemp: %v", err)
 	}
 
-	defer func() { _ = os.Remove(tmp.Name()) }()
+	t.Cleanup(func() {
+		if removeErr := os.Remove(tmp.Name()); removeErr != nil {
+			t.Logf("cleanup: remove %s: %v", tmp.Name(), removeErr)
+		}
+	})
 
 	if _, err = tmp.Write(content); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -151,7 +167,11 @@ func TestUpload_WriteError(t *testing.T) {
 		t.Fatalf("CreateTemp: %v", err)
 	}
 
-	defer func() { _ = os.Remove(tmp.Name()) }()
+	t.Cleanup(func() {
+		if removeErr := os.Remove(tmp.Name()); removeErr != nil {
+			t.Logf("cleanup: remove %s: %v", tmp.Name(), removeErr)
+		}
+	})
 
 	if err = tmp.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -188,6 +208,7 @@ func benchmarkDownload(b *testing.B, size int) {
 			b.Fatalf("Download error: %v", err)
 		}
 
+		// Best-effort cleanup inside benchmark hot loop — error not actionable.
 		_ = os.Remove(tmpPath)
 	}
 
@@ -209,7 +230,7 @@ func benchmarkUpload(b *testing.B, size int) {
 		b.Fatalf("CreateTemp: %v", err)
 	}
 
-	defer func() { _ = os.Remove(tmp.Name()) }()
+	b.Cleanup(func() { _ = os.Remove(tmp.Name()) })
 
 	if _, err = tmp.Write(content); err != nil {
 		b.Fatalf("Write: %v", err)

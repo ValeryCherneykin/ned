@@ -6,12 +6,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ValeryCherneykin/ned/internal/auth"
-	"github.com/ValeryCherneykin/ned/internal/target"
-	"github.com/ValeryCherneykin/ned/internal/terminal"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/ValeryCherneykin/ned/internal/auth"
+	"github.com/ValeryCherneykin/ned/internal/target"
+	"github.com/ValeryCherneykin/ned/internal/terminal"
 )
 
 // Options configures an SSH connection.

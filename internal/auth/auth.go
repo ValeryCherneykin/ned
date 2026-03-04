@@ -13,9 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ValeryCherneykin/ned/internal/terminal"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+
+	"github.com/ValeryCherneykin/ned/internal/terminal"
 )
 
 var defaultKeyFiles = []string{
