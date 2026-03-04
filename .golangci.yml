@@ -58,8 +58,8 @@ linters:
         - style
         - performance
       disabled-checks:
-        - hugeParam      # target.Target is 80 bytes — fine for a CLI tool, not a hot loop
-        - whyNoLint      # nolint without explanation is common in obvious cases
+        - hugeParam   # target.Target is 80 bytes — fine for a CLI tool, not a hot loop
+        - whyNoLint   # nolint without explanation is common in obvious cases
 
     revive:
       rules:
@@ -76,17 +76,12 @@ linters:
     unparam:
       check-exported: false
 
-exclusions:
-  rules:
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
     # Test cleanup: os.Remove failure is logged but not fatal — intentional discard.
     - path: "_test\\.go"
       linters:
         - errcheck
-    # gosec in tests is noise — no production security risk.
-    - path: "_test\\.go"
-      linters:
         - gosec
-
-issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
