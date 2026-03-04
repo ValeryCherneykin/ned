@@ -91,8 +91,12 @@ func TestDownload_TempFileNameContainsBasename(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(tmpPath, "nginx.conf") {
-		t.Errorf("temp path %q does not contain file basename", tmpPath)
+	if !strings.Contains(tmpPath, "nginx") {
+		t.Errorf("temp path %q does not contain file base name", tmpPath)
+	}
+
+	if !strings.Contains(tmpPath, ".conf") {
+		t.Errorf("temp path %q does not contain file extension", tmpPath)
 	}
 }
 

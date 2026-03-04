@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/ValeryCherneykin/ned/internal/backend"
 	"github.com/ValeryCherneykin/ned/internal/config"
@@ -14,23 +16,33 @@ import (
 	"github.com/ValeryCherneykin/ned/internal/target"
 	"github.com/ValeryCherneykin/ned/internal/terminal"
 	"github.com/ValeryCherneykin/ned/internal/transfer"
+	"github.com/ValeryCherneykin/ned/internal/watch"
 )
+
+// Version is set at build time via -ldflags "-X main.Version=x.y.z".
+var Version = "dev"
 
 func main() {
 	identityFile := flag.String("i", "", "SSH identity file")
 	portOverride := flag.String("p", "", "SSH port override")
+	watchMode := flag.Bool("w", false, "watch mode: upload on every :w without exiting the editor")
 	flag.Usage = terminal.PrintUsage
 	flag.Parse()
+
+	if flag.NArg() == 1 && flag.Arg(0) == "--version" {
+		fmt.Println(Version)
+		return
+	}
 
 	if flag.NArg() != 1 {
 		terminal.PrintUsage()
 		os.Exit(1)
 	}
 
-	run(flag.Arg(0), *identityFile, *portOverride)
+	run(flag.Arg(0), *identityFile, *portOverride, *watchMode)
 }
 
-func run(raw, identityFile, portOverride string) {
+func run(raw, identityFile, portOverride string, watchMode bool) {
 	// ── Load config ──────────────────────────────────────────────────────────
 	cfg, err := config.Load()
 	if err != nil {
@@ -39,7 +51,6 @@ func run(raw, identityFile, portOverride string) {
 	}
 
 	// ── Parse target ─────────────────────────────────────────────────────────
-	// Try alias resolution first: if the raw arg has no ":/" it might be an alias.
 	resolved := resolveAlias(raw, cfg, portOverride)
 
 	t, err := target.Parse(resolved)
@@ -47,12 +58,10 @@ func run(raw, identityFile, portOverride string) {
 		terminal.Fatal("invalid target %q: %v", raw, err)
 	}
 
-	// Apply -p flag.
 	if portOverride != "" {
 		t.Port = portOverride
 	}
 
-	// Apply config defaults.
 	applyDefaults(&t, cfg, &identityFile)
 
 	// ── Open backend ─────────────────────────────────────────────────────────
@@ -69,10 +78,11 @@ func run(raw, identityFile, portOverride string) {
 			connOpts = append(connOpts, connection.WithIdentityFile(identityFile))
 		}
 
-		sess, err := connection.Open(t, connOpts...)
-		if err != nil {
-			terminal.Fatal("connection failed: %v", err)
+		sess, openErr := connection.Open(t, connOpts...)
+		if openErr != nil {
+			terminal.Fatal("connection failed: %v", openErr)
 		}
+
 		defer func() {
 			if closeErr := sess.Close(); closeErr != nil {
 				terminal.Warn("close session: %v", closeErr)
@@ -80,10 +90,7 @@ func run(raw, identityFile, portOverride string) {
 		}()
 
 		terminal.Status("connected")
-
-		// Offer to install SSH key after first password-auth connect.
 		offerKeyInstall(sess, t)
-
 		b = backend.NewSSH(sess.SFTP)
 	}
 
@@ -92,6 +99,7 @@ func run(raw, identityFile, portOverride string) {
 	if err != nil {
 		terminal.Fatal("download: %v", err)
 	}
+
 	defer func() {
 		if removeErr := os.Remove(tmpPath); removeErr != nil {
 			terminal.Warn("remove temp: %v", removeErr)
@@ -105,31 +113,66 @@ func run(raw, identityFile, portOverride string) {
 	}
 
 	// ── Edit ─────────────────────────────────────────────────────────────────
-	terminal.Status("opening in %s", editor.Resolved())
+	if watchMode {
+		terminal.Status("opening in %s (watch mode — uploading on every :w)", editor.Resolved())
+		runWithWatch(b, tmpPath, t)
+	} else {
+		terminal.Status("opening in %s", editor.Resolved())
 
-	if err = editor.Open(tmpPath); err != nil {
-		terminal.Fatal("editor: %v", err)
-	}
+		if err = editor.Open(tmpPath); err != nil {
+			terminal.Fatal("editor: %v", err)
+		}
 
-	// ── Upload ───────────────────────────────────────────────────────────────
-	terminal.Status("uploading to %s", t.RemotePath)
+		terminal.Status("uploading to %s", t.RemotePath)
 
-	if err = transfer.Upload(b, tmpPath, t.RemotePath); err != nil {
-		terminal.Fatal("upload: %v", err)
+		if err = transfer.Upload(b, tmpPath, t.RemotePath); err != nil {
+			terminal.Fatal("upload: %v", err)
+		}
 	}
 
 	terminal.Success("saved %s", t)
 }
 
-// offerKeyInstall checks if ned's managed key is already in the auth chain.
-// If not, it asks the user if they want to install it for passwordless access.
+// runWithWatch starts the fsnotify watcher in a goroutine, opens the editor,
+// and cancels the watcher when the editor exits. A final upload is always done
+// on exit to ensure the last :wq write is captured.
+func runWithWatch(b backend.Backend, tmpPath string, t target.Target) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		if err := watch.Watch(ctx, tmpPath, t.RemotePath, b); err != nil {
+			terminal.Warn("watcher: %v", err)
+		}
+	}()
+
+	if err := editor.Open(tmpPath); err != nil {
+		terminal.Fatal("editor: %v", err)
+	}
+
+	cancel()
+	wg.Wait()
+
+	// Final upload — ensures the last :wq write is always uploaded.
+	terminal.Status("uploading to %s", t.RemotePath)
+
+	if err := transfer.Upload(b, tmpPath, t.RemotePath); err != nil {
+		terminal.Fatal("upload: %v", err)
+	}
+}
+
+// offerKeyInstall offers to install an SSH key after password-auth success.
 func offerKeyInstall(sess *connection.Session, t target.Target) {
 	kp, err := keygen.DefaultKeyPair()
 	if err != nil {
 		return
 	}
 
-	// If the managed key already exists locally, assume it's already installed.
 	if _, err = os.Stat(kp.PrivatePath); err == nil {
 		return
 	}
@@ -155,16 +198,15 @@ func offerKeyInstall(sess *connection.Session, t target.Target) {
 	terminal.Success("SSH key installed — next connect will be passwordless")
 }
 
-// resolveAlias checks if raw is a config alias and expands it.
+// resolveAlias expands a config alias to a full target string.
 func resolveAlias(raw string, cfg *config.Config, portOverride string) string {
-	// If it already contains ":/" it's a full target, not an alias.
 	if strings.Contains(raw, ":/") {
 		return raw
 	}
 
 	host, ok := cfg.ResolveAlias(raw)
 	if !ok {
-		return raw // let Parse produce the error
+		return raw
 	}
 
 	user := host.User
@@ -176,6 +218,7 @@ func resolveAlias(raw string, cfg *config.Config, portOverride string) string {
 	if port == "" {
 		port = cfg.Defaults.Port
 	}
+
 	if portOverride != "" {
 		port = portOverride
 	}
@@ -183,9 +226,11 @@ func resolveAlias(raw string, cfg *config.Config, portOverride string) string {
 	if user != "" && port != "" {
 		return fmt.Sprintf("%s@%s:%s:/", user, host.Host, port)
 	}
+
 	if user != "" {
 		return fmt.Sprintf("%s@%s:/", user, host.Host)
 	}
+
 	return fmt.Sprintf("%s:/", host.Host)
 }
 
@@ -194,6 +239,7 @@ func applyDefaults(t *target.Target, cfg *config.Config, identityFile *string) {
 	if t.User == "" && cfg.Defaults.User != "" {
 		t.User = cfg.Defaults.User
 	}
+
 	if *identityFile == "" && cfg.Defaults.Identity != "" {
 		*identityFile = cfg.Defaults.Identity
 	}

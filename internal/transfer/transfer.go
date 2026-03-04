@@ -14,9 +14,9 @@ import (
 // Download fetches remotePath via b into a local temp file.
 // Returns (tempPath, isNew, error). Caller must os.Remove(tempPath) when done.
 func Download(b backend.Backend, remotePath string) (tempPath string, isNew bool, err error) {
-	prefix := "ned-" + filepath.Base(remotePath) + "-"
-
-	tmp, err := os.CreateTemp("", prefix)
+	ext := filepath.Ext(remotePath)
+	base := strings.TrimSuffix(filepath.Base(remotePath), ext)
+	tmp, err := os.CreateTemp("", "ned-"+base+"-*"+ext)
 	if err != nil {
 		return "", false, fmt.Errorf("create temp file: %w", err)
 	}
