@@ -1,8 +1,4 @@
 # .golangci.yml for github.com/ValeryCherneykin/ned
-# Comprehensive, strict configuration tailored for a high-quality public Go library.
-# Goal: enforce readability, maintainability, idiomatic Go, security, and zero technical debt.
-# Inspired by best practices from Kubernetes, Prometheus, and Uber Go style guides.
-
 version: "2"
 
 run:
@@ -79,9 +75,3 @@ linters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-rules:
-    # Test cleanup: os.Remove failure is logged but not fatal — intentional discard.
-    - path: "_test\\.go"
-      linters:
-        - errcheck
-        - gosec
