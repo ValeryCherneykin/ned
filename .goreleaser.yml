@@ -31,6 +31,7 @@ brews:
     repository:
       owner: ValeryCherneykin
       name: homebrew-ned
+      token: "{{ .Env.GITHUB_TOKEN }}"   
     homepage: https://github.com/ValeryCherneykin/ned
     description: "Open remote files in your local editor over SSH or Docker"
     license: MIT
