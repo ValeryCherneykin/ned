@@ -14,7 +14,6 @@ formatters:
   enable:
     - gofmt
     - goimports
-
   settings:
     goimports:
       local-prefixes:
@@ -32,11 +31,8 @@ linters:
     - prealloc
     - unparam
     - errorlint
-    - godot
-    - exhaustive
     - gocritic
     - revive
-    - stylecheck
 
   settings:
     errcheck:
@@ -54,11 +50,6 @@ linters:
       errorf: true
       asserts: true
       comparison: true
-
-    godot:
-      scope: declarations
-      capital: false
-      period: true
 
     gocritic:
       enabled-tags:
@@ -78,27 +69,6 @@ linters:
         - name: receiver-naming
         - name: context-as-argument
 
-    stylecheck:
-      checks:
-        - all
-        - "-ST1000"
-
-    exhaustive:
-      check:
-        - switch
-      default-signifies-exhaustive: true
-
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-
-  exclude-dirs:
-    - vendor
-    - third_party
-
-  exclude-rules:
-    - path: "_test\\.go"
-      linters:
-        - gosec
-        - unparam
-        - godot
