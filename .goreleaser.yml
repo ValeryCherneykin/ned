@@ -22,18 +22,45 @@ builds:
 archives:
   - formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
 
 checksum:
   name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: ValeryCherneykin
+    name: ned
+  name_template: "v{{ .Version }}"
 
 brews:
   - name: ned
     repository:
       owner: ValeryCherneykin
       name: homebrew-ned
-      token: "{{ .Env.GITHUB_TOKEN }}"   
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaser-bot
+      email: bot@goreleaser.com
+    commit_msg_template: "chore: update ned to {{ .Tag }}"
     homepage: https://github.com/ValeryCherneykin/ned
-    description: "Open remote files in your local editor over SSH or Docker"
+    description: "Open any remote file in your local editor over SSH or Docker"
     license: MIT
+    install: |
+      bin.install "ned"
     test: |
       system "#{bin}/ned --version"
