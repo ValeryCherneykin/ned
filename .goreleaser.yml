@@ -45,7 +45,7 @@ release:
   github:
     owner: ValeryCherneykin
     name: ned
-    replace: true
+  mode: replace
   name_template: "v{{ .Version }}"
 
 brews:
