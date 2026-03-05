@@ -50,8 +50,10 @@ func (t Target) String() string {
 	if t.IsDocker() {
 		return fmt.Sprintf("docker://%s%s", t.Host, t.RemotePath)
 	}
-
-	return fmt.Sprintf("%s@%s:%s%s", t.User, t.Host, t.Port, t.RemotePath)
+	if t.Port != DefaultPort {
+		return fmt.Sprintf("%s@%s:%s%s", t.User, t.Host, t.Port, t.RemotePath)
+	}
+	return fmt.Sprintf("%s@%s%s", t.User, t.Host, t.RemotePath)
 }
 
 // Parse parses raw into a Target.

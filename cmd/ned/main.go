@@ -11,6 +11,7 @@ import (
 	"github.com/ValeryCherneykin/ned/internal/backend"
 	"github.com/ValeryCherneykin/ned/internal/config"
 	"github.com/ValeryCherneykin/ned/internal/connection"
+	"github.com/ValeryCherneykin/ned/internal/dirmode"
 	"github.com/ValeryCherneykin/ned/internal/editor"
 	"github.com/ValeryCherneykin/ned/internal/keygen"
 	"github.com/ValeryCherneykin/ned/internal/target"
@@ -26,6 +27,7 @@ func main() {
 	identityFile := flag.String("i", "", "SSH identity file")
 	portOverride := flag.String("p", "", "SSH port override")
 	watchMode := flag.Bool("w", false, "watch mode: upload on every :w without exiting the editor")
+	syncMode := flag.Bool("sync", false, "sync mode: delete remote files when deleted locally (directory mode only)")
 	flag.Usage = terminal.PrintUsage
 	flag.Parse()
 
@@ -39,10 +41,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	run(flag.Arg(0), *identityFile, *portOverride, *watchMode)
+	run(flag.Arg(0), *identityFile, *portOverride, *watchMode, *syncMode)
 }
 
-func run(raw, identityFile, portOverride string, watchMode bool) {
+func run(raw, identityFile, portOverride string, watchMode, syncMode bool) {
 	// ── Load config ──────────────────────────────────────────────────────────
 	cfg, err := config.Load()
 	if err != nil {
@@ -94,10 +96,31 @@ func run(raw, identityFile, portOverride string, watchMode bool) {
 		b = backend.NewSSH(sess.SFTP)
 	}
 
-	// ── Download ─────────────────────────────────────────────────────────────
+	// ── Route: directory or file mode ────────────────────────────────────────
+	if isDirectory(b, t.RemotePath) {
+		runDirMode(b, t, syncMode)
+	} else {
+		runFileMode(b, t, watchMode)
+	}
+}
+
+// isDirectory reports whether remotePath looks like a directory target.
+// Trailing slash is the explicit signal; no file extension is a hint.
+func isDirectory(b backend.Backend, remotePath string) bool {
+	if strings.HasSuffix(remotePath, "/") {
+		return true
+	}
+	// Try ReadDir — if it works, it's a directory
+	entries, err := b.ReadDir(remotePath)
+	return err == nil && entries != nil
+}
+
+// runFileMode handles single-file editing (original ned behaviour).
+func runFileMode(b backend.Backend, t target.Target, watchMode bool) {
 	tmpPath, isNew, err := transfer.Download(b, t.RemotePath)
 	if err != nil {
-		terminal.Fatal("download: %v", err)
+		// Hint: maybe it's a directory without trailing slash
+		terminal.Fatal("download: %v\n\nHint: for directories use trailing slash: ned %s/", err, t)
 	}
 
 	defer func() {
@@ -112,7 +135,6 @@ func run(raw, identityFile, portOverride string, watchMode bool) {
 		terminal.Status("%s downloaded", t.RemotePath)
 	}
 
-	// ── Edit ─────────────────────────────────────────────────────────────────
 	if watchMode {
 		terminal.Status("opening in %s (watch mode — uploading on every :w)", editor.Resolved())
 		runWithWatch(b, tmpPath, t)
@@ -133,9 +155,111 @@ func run(raw, identityFile, portOverride string, watchMode bool) {
 	terminal.Success("saved %s", t)
 }
 
-// runWithWatch starts the fsnotify watcher in a goroutine, opens the editor,
-// and cancels the watcher when the editor exits. A final upload is always done
-// on exit to ensure the last :wq write is captured.
+// runDirMode handles directory editing.
+func runDirMode(b backend.Backend, t target.Target, syncMode bool) {
+	remoteBase := dirmode.RemoteBase(t.RemotePath)
+
+	// Create a temp dir with the remote dir name for cleaner netrw display.
+	tmpDir, err := os.MkdirTemp("", "ned-dir-*")
+	if err != nil {
+		terminal.Fatal("create temp dir: %v", err)
+	}
+
+	defer func() {
+		if removeErr := os.RemoveAll(tmpDir); removeErr != nil {
+			terminal.Warn("remove temp dir: %v", removeErr)
+		}
+	}()
+
+	// ── Download ─────────────────────────────────────────────────────────────
+	terminal.Status("downloading %s", remoteBase)
+
+	if err = dirmode.Download(b, remoteBase, tmpDir); err != nil {
+		terminal.Fatal("download dir: %v", err)
+	}
+
+	// ── Snapshot before editing ───────────────────────────────────────────────
+	before, err := dirmode.Snapshot(tmpDir)
+	if err != nil {
+		terminal.Fatal("snapshot: %v", err)
+	}
+
+	// ── Watch in background ───────────────────────────────────────────────────
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		if watchErr := dirmode.Watch(ctx, tmpDir, remoteBase, b); watchErr != nil {
+			terminal.Warn("watcher: %v", watchErr)
+		}
+	}()
+
+	// ── Edit ─────────────────────────────────────────────────────────────────
+	terminal.Status("opening %s in %s", remoteBase, editor.Resolved())
+
+	if err = editor.Open(tmpDir); err != nil {
+		terminal.Fatal("editor: %v", err)
+	}
+
+	cancel()
+	wg.Wait()
+
+	// ── Final upload ──────────────────────────────────────────────────────────
+	terminal.Status("uploading changes to %s", remoteBase)
+
+	if err = dirmode.UploadAll(b, tmpDir, remoteBase); err != nil {
+		terminal.Warn("final upload: %v", err)
+	}
+
+	// ── Handle deleted files ──────────────────────────────────────────────────
+	after, err := dirmode.Snapshot(tmpDir)
+	if err != nil {
+		terminal.Warn("snapshot after: %v", err)
+		return
+	}
+
+	deleted := dirmode.CollectDeleted(before, after)
+
+	if len(deleted) == 0 {
+		terminal.Success("saved %s", remoteBase)
+		return
+	}
+
+	if syncMode {
+		// --sync: delete remote without asking.
+		for _, rel := range deleted {
+			remotePath := remoteBase + "/" + rel
+			if delErr := b.DeleteFile(remotePath); delErr != nil {
+				terminal.Warn("delete %s: %v", remotePath, delErr)
+			} else {
+				terminal.Status("✗ deleted %s", remotePath)
+			}
+		}
+	} else {
+		// Ask confirmation per deleted file.
+		terminal.Warn("%d file(s) deleted locally:", len(deleted))
+
+		for _, rel := range deleted {
+			remotePath := remoteBase + "/" + rel
+			if terminal.Confirm(fmt.Sprintf("  delete remote %s?", remotePath), false) {
+				if delErr := b.DeleteFile(remotePath); delErr != nil {
+					terminal.Warn("delete %s: %v", remotePath, delErr)
+				} else {
+					terminal.Status("✗ deleted %s", remotePath)
+				}
+			}
+		}
+	}
+
+	terminal.Success("saved %s", remoteBase)
+}
+
+// runWithWatch starts the fsnotify watcher and opens the editor.
 func runWithWatch(b backend.Backend, tmpPath string, t target.Target) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -158,7 +282,6 @@ func runWithWatch(b backend.Backend, tmpPath string, t target.Target) {
 	cancel()
 	wg.Wait()
 
-	// Final upload — ensures the last :wq write is always uploaded.
 	terminal.Status("uploading to %s", t.RemotePath)
 
 	if err := transfer.Upload(b, tmpPath, t.RemotePath); err != nil {

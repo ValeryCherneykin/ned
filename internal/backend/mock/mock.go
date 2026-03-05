@@ -1,5 +1,4 @@
 // Package mock provides an in-memory Backend implementation for testing.
-// No real SSH or Docker is needed — all operations work against a map[string][]byte.
 package mock
 
 import (
@@ -10,27 +9,23 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/ValeryCherneykin/ned/internal/backend"
 )
 
 // Backend is a thread-safe in-memory implementation of backend.Backend.
-// Use New() to create one pre-seeded with files.
 type Backend struct {
-	// WriteErr forces WriteFile to return this error (for error path tests).
-	WriteErr error
-	// ReadErr forces ReadFile to return this error (for error path tests).
-	ReadErr error
+	WriteErr       error
+	ReadErr        error
+	DeleteErr      error
+	Closed         bool
+	MkdirAllCalled []string
 
 	mu    sync.RWMutex
 	files map[string][]byte
-
-	// MkdirAllCalled tracks which paths were passed to MkdirAll.
-	MkdirAllCalled []string
-	// Closed reports whether Close was called.
-	Closed bool
 }
 
 // New creates a Backend pre-seeded with the given files.
-// Keys are remote paths, values are file contents. Pass nil for an empty backend.
 func New(files map[string][]byte) *Backend {
 	if files == nil {
 		files = make(map[string][]byte)
@@ -40,7 +35,6 @@ func New(files map[string][]byte) *Backend {
 }
 
 // ReadFile returns the contents of the file at path.
-// Returns os.ErrNotExist if the file is not in the map.
 func (b *Backend) ReadFile(path string) (io.ReadCloser, error) {
 	if b.ReadErr != nil {
 		return nil, b.ReadErr
@@ -54,11 +48,10 @@ func (b *Backend) ReadFile(path string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("open %s: %w", path, os.ErrNotExist)
 	}
 
-	// Return a copy so callers cannot mutate the internal map.
 	return io.NopCloser(bytes.NewReader(append([]byte(nil), data...))), nil
 }
 
-// WriteFile stores r under path, replacing any existing contents.
+// WriteFile stores r under path.
 func (b *Backend) WriteFile(path string, r io.Reader) error {
 	if b.WriteErr != nil {
 		return b.WriteErr
@@ -78,12 +71,65 @@ func (b *Backend) WriteFile(path string, r io.Reader) error {
 	return nil
 }
 
-// MkdirAll records the call and is otherwise a no-op.
+// MkdirAll records the call and is a no-op.
 func (b *Backend) MkdirAll(path string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	b.MkdirAllCalled = append(b.MkdirAllCalled, path)
+
+	return nil
+}
+
+// ReadDir lists all entries whose path starts with path/.
+func (b *Backend) ReadDir(path string) ([]backend.Entry, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	prefix := strings.TrimSuffix(path, "/") + "/"
+	seen := make(map[string]bool)
+	entries := make([]backend.Entry, 0, len(b.files))
+
+	for key := range b.files {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+
+		rest := strings.TrimPrefix(key, prefix)
+		parts := strings.SplitN(rest, "/", 2)
+		name := parts[0]
+
+		if seen[name] {
+			continue
+		}
+
+		seen[name] = true
+		isDir := len(parts) > 1
+
+		entries = append(entries, backend.Entry{
+			Name:  name,
+			IsDir: isDir,
+			Size:  int64(len(b.files[key])),
+		})
+	}
+
+	return entries, nil
+}
+
+// DeleteFile removes path from the in-memory store.
+func (b *Backend) DeleteFile(path string) error {
+	if b.DeleteErr != nil {
+		return b.DeleteErr
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if _, ok := b.files[path]; !ok {
+		return fmt.Errorf("remove %s: %w", path, os.ErrNotExist)
+	}
+
+	delete(b.files, path)
 
 	return nil
 }
@@ -95,7 +141,6 @@ func (b *Backend) Close() error {
 }
 
 // Get returns the current contents of path, or nil if not found.
-// Helper for assertions in tests.
 func (b *Backend) Get(path string) []byte {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -113,7 +158,7 @@ func (b *Backend) Has(path string) bool {
 	return ok
 }
 
-// FileCount returns the number of files stored in the backend.
+// FileCount returns the number of files stored.
 func (b *Backend) FileCount() int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -121,7 +166,7 @@ func (b *Backend) FileCount() int {
 	return len(b.files)
 }
 
-// HasMkdirAll reports whether MkdirAll was called with the given path.
+// HasMkdirAll reports whether MkdirAll was called with path.
 func (b *Backend) HasMkdirAll(path string) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

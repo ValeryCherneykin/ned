@@ -61,5 +61,34 @@ func (b *SSHBackend) MkdirAll(path string) error {
 	return nil
 }
 
+// ReadDir lists the contents of path on the remote host via SFTP (non-recursive).
+func (b *SSHBackend) ReadDir(path string) ([]Entry, error) {
+	infos, err := b.client.ReadDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("sftp readdir %s: %w", path, err)
+	}
+
+	entries := make([]Entry, 0, len(infos))
+
+	for _, info := range infos {
+		entries = append(entries, Entry{
+			Name:  info.Name(),
+			IsDir: info.IsDir(),
+			Size:  info.Size(),
+		})
+	}
+
+	return entries, nil
+}
+
+// DeleteFile removes a single file from the remote host via SFTP.
+func (b *SSHBackend) DeleteFile(path string) error {
+	if err := b.client.Remove(path); err != nil {
+		return fmt.Errorf("sftp remove %s: %w", path, err)
+	}
+
+	return nil
+}
+
 // Close releases the underlying SFTP client connection.
 func (b *SSHBackend) Close() error { return b.client.Close() }

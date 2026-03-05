@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // DockerBackend implements Backend via `docker exec`.
@@ -21,7 +23,6 @@ func NewDocker(container string) *DockerBackend {
 }
 
 // ReadFile reads the file at path from the container via `docker exec cat`.
-// Returns a wrapped os.ErrNotExist error if the file is absent inside the container.
 func (b *DockerBackend) ReadFile(path string) (io.ReadCloser, error) {
 	out, err := exec.Command("docker", "exec", b.container, "cat", path).Output() //nolint:gosec
 	if err != nil {
@@ -42,7 +43,6 @@ func (b *DockerBackend) WriteFile(path string, r io.Reader) error {
 		return err
 	}
 
-	// Stream directly into container stdin — no intermediate buffer needed.
 	cmd := exec.Command("docker", "exec", "-i", b.container, "tee", path) //nolint:gosec
 	cmd.Stdin = r
 
@@ -53,7 +53,7 @@ func (b *DockerBackend) WriteFile(path string, r io.Reader) error {
 	return nil
 }
 
-// MkdirAll creates path and all parent directories inside the container.
+// MkdirAll creates path and all parents inside the container.
 func (b *DockerBackend) MkdirAll(path string) error {
 	out, err := exec.Command("docker", "exec", b.container, "mkdir", "-p", path).CombinedOutput() //nolint:gosec
 	if err != nil {
@@ -63,11 +63,55 @@ func (b *DockerBackend) MkdirAll(path string) error {
 	return nil
 }
 
-// Close is a no-op for DockerBackend — docker exec commands are stateless.
+// ReadDir lists the contents of path inside the container (non-recursive).
+// Uses `ls -1A --file-type` for a simple listing.
+// ReadDir lists the contents of path inside the container (non-recursive).
+func (b *DockerBackend) ReadDir(path string) ([]Entry, error) {
+	out, err := exec.Command( //nolint:gosec
+		"docker", "exec", b.container,
+		"ls", "-1p", path,
+	).Output()
+	if err != nil {
+		if isDockerNotExist(err) {
+			return nil, fmt.Errorf("readdir %s: %w", path, os.ErrNotExist)
+		}
+		return nil, fmt.Errorf("docker exec ls %s: %w", path, err)
+	}
+
+	entries := make([]Entry, 0, 8)
+
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+
+		isDir := strings.HasSuffix(name, "/")
+		name = strings.TrimSuffix(name, "/")
+
+		entries = append(entries, Entry{
+			Name:  name,
+			IsDir: isDir,
+		})
+	}
+
+	return entries, nil
+}
+
+// DeleteFile removes a single file inside the container via `docker exec rm`.
+func (b *DockerBackend) DeleteFile(path string) error {
+	out, err := exec.Command("docker", "exec", b.container, "rm", "-f", path).CombinedOutput() //nolint:gosec
+	if err != nil {
+		return fmt.Errorf("docker exec rm %s: %w\n%s", path, err, out)
+	}
+
+	return nil
+}
+
+// Close is a no-op — docker exec commands are stateless.
 func (b *DockerBackend) Close() error { return nil }
 
 // isDockerNotExist reports whether err indicates a missing file inside the container.
-// Uses errors.As to correctly unwrap the ExitError from any wrapping.
 func isDockerNotExist(err error) bool {
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
@@ -75,4 +119,10 @@ func isDockerNotExist(err error) bool {
 	}
 
 	return false
+}
+
+// IsDir reports whether path is a directory inside the container.
+func (b *DockerBackend) IsDir(path string) bool {
+	err := exec.Command("docker", "exec", b.container, "test", "-d", path).Run() //nolint:gosec
+	return err == nil
 }
