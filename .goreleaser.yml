@@ -38,14 +38,15 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
-      - Merge pull request
-      - Merge branch
+      - "Merge pull request"
+      - "Merge branch"
 
 release:
   github:
     owner: ValeryCherneykin
     name: ned
   name_template: "v{{ .Version }}"
+  replace: true
 
 brews:
   - name: ned
