@@ -14,11 +14,15 @@ import (
 	"time"
 
 	"github.com/ValeryCherneykin/ned/internal/backend"
+	"github.com/ValeryCherneykin/ned/internal/ignore"
 	"github.com/ValeryCherneykin/ned/internal/terminal"
 	"github.com/ValeryCherneykin/ned/internal/transfer"
 )
 
-const pollInterval = 500 * time.Millisecond
+const (
+	pollInterval  = 500 * time.Millisecond
+	nedIgnoreFile = ".nedignore"
+)
 
 // FileInfo tracks a file in the local tmpdir.
 type FileInfo struct {
@@ -26,8 +30,8 @@ type FileInfo struct {
 }
 
 // Snapshot records the mtime of every file in localDir recursively.
-// Used to detect new, changed, and deleted files after editing.
-func Snapshot(localDir string) (map[string]FileInfo, error) {
+// Ignores paths matched by matcher — pass nil to include everything.
+func Snapshot(localDir string, m *ignore.Matcher) (map[string]FileInfo, error) {
 	snap := make(map[string]FileInfo)
 
 	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
@@ -35,13 +39,25 @@ func Snapshot(localDir string) (map[string]FileInfo, error) {
 			return err
 		}
 
-		if info.IsDir() {
-			return nil
-		}
-
 		rel, relErr := filepath.Rel(localDir, path)
 		if relErr != nil {
 			return relErr
+		}
+
+		if rel == "." {
+			return nil
+		}
+
+		if m.Match(rel, info.IsDir()) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}
+
+		if info.IsDir() {
+			return nil
 		}
 
 		snap[rel] = FileInfo{ModTime: info.ModTime()}
@@ -53,16 +69,39 @@ func Snapshot(localDir string) (map[string]FileInfo, error) {
 }
 
 // Download recursively downloads remotePath into localDir via b.
-// Creates localDir if it does not exist.
+// Reads .nedignore from the remote directory if present and skips matched paths.
 func Download(b backend.Backend, remotePath, localDir string) error {
 	if err := os.MkdirAll(localDir, 0o700); err != nil {
 		return fmt.Errorf("create local dir: %w", err)
 	}
 
-	return downloadDir(b, remotePath, localDir)
+	m := loadIgnore(b, remotePath)
+
+	return downloadDir(b, remotePath, localDir, m)
 }
 
-func downloadDir(b backend.Backend, remotePath, localDir string) error {
+// loadIgnore reads .nedignore from remotePath if it exists.
+// Returns a nil-safe Matcher — safe to use even if file is absent.
+func loadIgnore(b backend.Backend, remotePath string) *ignore.Matcher {
+	rc, err := b.ReadFile(remotePath + "/" + nedIgnoreFile)
+	if err != nil {
+		return ignore.ParseString("")
+	}
+
+	defer func() { _ = rc.Close() }()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return ignore.ParseString("")
+	}
+
+	m := ignore.ParseString(string(data))
+	terminal.Status("loaded .nedignore")
+
+	return m
+}
+
+func downloadDir(b backend.Backend, remotePath, localDir string, m *ignore.Matcher) error {
 	entries, err := b.ReadDir(remotePath)
 	if err != nil {
 		return fmt.Errorf("readdir %s: %w", remotePath, err)
@@ -70,6 +109,17 @@ func downloadDir(b backend.Backend, remotePath, localDir string) error {
 
 	for _, entry := range entries {
 		name := filepath.Base(entry.Name)
+
+		// Skip .nedignore itself — no need to edit it locally.
+		if name == nedIgnoreFile {
+			continue
+		}
+
+		if m.Match(name, entry.IsDir) {
+			terminal.Status("ignoring %s", name)
+			continue
+		}
+
 		remoteChild := remotePath + "/" + name
 		localChild := filepath.Join(localDir, name)
 
@@ -77,9 +127,11 @@ func downloadDir(b backend.Backend, remotePath, localDir string) error {
 			if err = os.MkdirAll(localChild, 0o700); err != nil {
 				return fmt.Errorf("mkdir %s: %w", localChild, err)
 			}
-			if err := downloadDir(b, remoteChild, localChild); err != nil {
+
+			if err := downloadDir(b, remoteChild, localChild, m); err != nil {
 				return err
 			}
+
 			continue
 		}
 
@@ -107,9 +159,9 @@ func downloadDir(b backend.Backend, remotePath, localDir string) error {
 }
 
 // Watch polls localDir every 500ms and uploads changed/new files to remoteBase via b.
-// Blocks until ctx is cancelled. Thread-safe — runs in a goroutine.
-func Watch(ctx context.Context, localDir, remoteBase string, b backend.Backend) error {
-	snap, err := Snapshot(localDir)
+// Blocks until ctx is cancelled.
+func Watch(ctx context.Context, localDir, remoteBase string, b backend.Backend, m *ignore.Matcher) error {
+	snap, err := Snapshot(localDir, m)
 	if err != nil {
 		return fmt.Errorf("initial snapshot: %w", err)
 	}
@@ -125,7 +177,7 @@ func Watch(ctx context.Context, localDir, remoteBase string, b backend.Backend) 
 			return nil
 
 		case <-ticker.C:
-			current, snapErr := Snapshot(localDir)
+			current, snapErr := Snapshot(localDir, m)
 			if snapErr != nil {
 				terminal.Warn("snapshot: %v", snapErr)
 				continue
@@ -136,8 +188,7 @@ func Watch(ctx context.Context, localDir, remoteBase string, b backend.Backend) 
 			for rel, info := range current {
 				prev, existed := snap[rel]
 
-				changed := !existed || !info.ModTime.Equal(prev.ModTime)
-				if !changed {
+				if existed && info.ModTime.Equal(prev.ModTime) {
 					continue
 				}
 
@@ -174,23 +225,25 @@ func CollectDeleted(before, after map[string]FileInfo) []string {
 	return deleted
 }
 
-// UploadAll uploads every file in localDir to remoteBase.
-// Used for final sync on editor exit.
-func UploadAll(b backend.Backend, localDir, remoteBase string) error {
-	return filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
+// UploadChanged uploads only files that changed between before and after snapshots.
+// Replaces the old UploadAll to avoid redundant re-upload of unchanged files.
+func UploadChanged(b backend.Backend, localDir, remoteBase string, before, after map[string]FileInfo) error {
+	for rel, info := range after {
+		prev, existed := before[rel]
+
+		if existed && info.ModTime.Equal(prev.ModTime) {
+			continue
 		}
 
-		rel, err := filepath.Rel(localDir, path)
-		if err != nil {
-			return err
-		}
-
+		localPath := filepath.Join(localDir, rel)
 		remotePath := remoteBase + "/" + filepath.ToSlash(rel)
 
-		return transfer.Upload(b, path, remotePath)
-	})
+		if err := transfer.Upload(b, localPath, remotePath); err != nil {
+			return fmt.Errorf("upload %s: %w", rel, err)
+		}
+	}
+
+	return nil
 }
 
 // RemoteBase normalises a remote directory path.

@@ -13,6 +13,7 @@ import (
 	"github.com/ValeryCherneykin/ned/internal/connection"
 	"github.com/ValeryCherneykin/ned/internal/dirmode"
 	"github.com/ValeryCherneykin/ned/internal/editor"
+	"github.com/ValeryCherneykin/ned/internal/ignore"
 	"github.com/ValeryCherneykin/ned/internal/keygen"
 	"github.com/ValeryCherneykin/ned/internal/target"
 	"github.com/ValeryCherneykin/ned/internal/terminal"
@@ -104,23 +105,30 @@ func run(raw, identityFile, portOverride string, watchMode, syncMode bool) {
 	}
 }
 
-// isDirectory reports whether remotePath looks like a directory target.
-// Trailing slash is the explicit signal; no file extension is a hint.
+// isDirectory reports whether remotePath is a directory on the remote.
 func isDirectory(b backend.Backend, remotePath string) bool {
 	if strings.HasSuffix(remotePath, "/") {
 		return true
 	}
-	// Try ReadDir — if it works, it's a directory
-	entries, err := b.ReadDir(remotePath)
-	return err == nil && entries != nil
+
+	type dirChecker interface {
+		IsDir(string) bool
+	}
+
+	if dc, ok := b.(dirChecker); ok {
+		return dc.IsDir(remotePath)
+	}
+
+	_, err := b.ReadDir(remotePath)
+
+	return err == nil
 }
 
-// runFileMode handles single-file editing (original ned behaviour).
+// runFileMode handles single-file editing.
 func runFileMode(b backend.Backend, t target.Target, watchMode bool) {
 	tmpPath, isNew, err := transfer.Download(b, t.RemotePath)
 	if err != nil {
-		// Hint: maybe it's a directory without trailing slash
-		terminal.Fatal("download: %v\n\nHint: for directories use trailing slash: ned %s/", err, t)
+		terminal.Fatal("download: %v", err)
 	}
 
 	defer func() {
@@ -159,7 +167,6 @@ func runFileMode(b backend.Backend, t target.Target, watchMode bool) {
 func runDirMode(b backend.Backend, t target.Target, syncMode bool) {
 	remoteBase := dirmode.RemoteBase(t.RemotePath)
 
-	// Create a temp dir with the remote dir name for cleaner netrw display.
 	tmpDir, err := os.MkdirTemp("", "ned-dir-*")
 	if err != nil {
 		terminal.Fatal("create temp dir: %v", err)
@@ -179,12 +186,14 @@ func runDirMode(b backend.Backend, t target.Target, syncMode bool) {
 	}
 
 	// ── Snapshot before editing ───────────────────────────────────────────────
-	before, err := dirmode.Snapshot(tmpDir)
+	m := ignore.ParseString("") // matcher already applied during download
+
+	before, err := dirmode.Snapshot(tmpDir, m)
 	if err != nil {
 		terminal.Fatal("snapshot: %v", err)
 	}
 
-	// ── Watch in background ───────────────────────────────────────────────────
+	// ── Watch ─────────────────────────────────────────────────────────────────
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var wg sync.WaitGroup
@@ -194,7 +203,7 @@ func runDirMode(b backend.Backend, t target.Target, syncMode bool) {
 	go func() {
 		defer wg.Done()
 
-		if watchErr := dirmode.Watch(ctx, tmpDir, remoteBase, b); watchErr != nil {
+		if watchErr := dirmode.Watch(ctx, tmpDir, remoteBase, b, m); watchErr != nil {
 			terminal.Warn("watcher: %v", watchErr)
 		}
 	}()
@@ -209,20 +218,19 @@ func runDirMode(b backend.Backend, t target.Target, syncMode bool) {
 	cancel()
 	wg.Wait()
 
-	// ── Final upload ──────────────────────────────────────────────────────────
-	terminal.Status("uploading changes to %s", remoteBase)
+	// ── Final upload — only changed files ────────────────────────────────────
+	after, err := dirmode.Snapshot(tmpDir, m)
+	if err != nil {
+		terminal.Warn("snapshot after: %v", err)
+	} else {
+		terminal.Status("uploading changes to %s", remoteBase)
 
-	if err = dirmode.UploadAll(b, tmpDir, remoteBase); err != nil {
-		terminal.Warn("final upload: %v", err)
+		if uploadErr := dirmode.UploadChanged(b, tmpDir, remoteBase, before, after); uploadErr != nil {
+			terminal.Warn("final upload: %v", uploadErr)
+		}
 	}
 
 	// ── Handle deleted files ──────────────────────────────────────────────────
-	after, err := dirmode.Snapshot(tmpDir)
-	if err != nil {
-		terminal.Warn("snapshot after: %v", err)
-		return
-	}
-
 	deleted := dirmode.CollectDeleted(before, after)
 
 	if len(deleted) == 0 {
@@ -231,7 +239,6 @@ func runDirMode(b backend.Backend, t target.Target, syncMode bool) {
 	}
 
 	if syncMode {
-		// --sync: delete remote without asking.
 		for _, rel := range deleted {
 			remotePath := remoteBase + "/" + rel
 			if delErr := b.DeleteFile(remotePath); delErr != nil {
@@ -241,7 +248,6 @@ func runDirMode(b backend.Backend, t target.Target, syncMode bool) {
 			}
 		}
 	} else {
-		// Ask confirmation per deleted file.
 		terminal.Warn("%d file(s) deleted locally:", len(deleted))
 
 		for _, rel := range deleted {
@@ -259,7 +265,7 @@ func runDirMode(b backend.Backend, t target.Target, syncMode bool) {
 	terminal.Success("saved %s", remoteBase)
 }
 
-// runWithWatch starts the fsnotify watcher and opens the editor.
+// runWithWatch starts the mtime watcher and opens the editor.
 func runWithWatch(b backend.Backend, tmpPath string, t target.Target) {
 	ctx, cancel := context.WithCancel(context.Background())
 
