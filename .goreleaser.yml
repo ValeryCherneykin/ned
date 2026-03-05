@@ -54,6 +54,7 @@ brews:
       owner: ValeryCherneykin
       name: homebrew-ned
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
     commit_author:
       name: goreleaser-bot
       email: bot@goreleaser.com
