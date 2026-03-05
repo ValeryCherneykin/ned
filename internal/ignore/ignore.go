@@ -28,7 +28,6 @@ func ParseString(content string) *Matcher {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
-		// Skip empty lines and comments.
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -42,36 +41,47 @@ func ParseString(content string) *Matcher {
 	return m
 }
 
-// Match reports whether relPath (relative to the watched directory) should be ignored.
+// Match reports whether relPath should be ignored.
 // isDir must be true when relPath refers to a directory.
 func (m *Matcher) Match(relPath string, isDir bool) bool {
-	if m == nil {
+	if m == nil || len(m.rules) == 0 {
 		return false
 	}
 
-	// Normalise to forward slashes for consistent matching.
 	relPath = filepath.ToSlash(relPath)
-	base := filepath.Base(relPath)
 
 	for _, r := range m.rules {
-		// dir-only rules only match directories.
-		if r.dirOnly && !isDir {
+		if matchRule(r, relPath, isDir) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func matchRule(r rule, relPath string, isDir bool) bool {
+	// Split path into components: "a/b/c" → ["a", "b", "c"]
+	parts := strings.Split(relPath, "/")
+
+	// Check every path component and prefix against the rule.
+	// This handles: node_modules/lodash/index.js → matches "node_modules" rule.
+	for i, part := range parts {
+		isLastPart := i == len(parts)-1
+		partIsDir := !isLastPart || isDir
+
+		// dir-only rules only match directory components.
+		if r.dirOnly && !partIsDir {
 			continue
 		}
 
-		// Match against base name first (most common case: *.log, node_modules).
-		if matchGlob(r.pattern, base) {
+		// Match component name against pattern.
+		if matchGlob(r.pattern, part) {
 			return true
 		}
 
-		// Match against full relative path (e.g. dist/bundle.js).
-		if matchGlob(r.pattern, relPath) {
-			return true
-		}
-
-		// Match path prefix — if rule is "vendor" ignore "vendor/anything".
-		prefix := r.pattern + "/"
-		if strings.HasPrefix(relPath, prefix) {
+		// Also match the path up to this component (handles explicit paths like "dist/bundle.js").
+		prefix := strings.Join(parts[:i+1], "/")
+		if matchGlob(r.pattern, prefix) {
 			return true
 		}
 	}
@@ -83,7 +93,6 @@ func (m *Matcher) Match(relPath string, isDir bool) bool {
 func matchGlob(pattern, name string) bool {
 	matched, err := filepath.Match(pattern, name)
 	if err != nil {
-		// Invalid pattern — treat as no match.
 		return false
 	}
 
